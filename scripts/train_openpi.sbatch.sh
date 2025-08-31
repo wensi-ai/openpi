@@ -6,7 +6,7 @@
 #SBATCH --gres=gpu:h200:1
 #SBATCH --mem=384G
 #SBATCH --cpus-per-task=28
-#SBATCH --time=1-00:00:00
+#SBATCH --time=2-00:00:00
 #SBATCH --output=outputs/sc/train_openpi_%j.out
 #SBATCH --error=outputs/sc/train_openpi_%j.err
 
@@ -27,7 +27,6 @@ uv run scripts/train_val.py pi0_b1k \
     --exp_name="openpi_$(date +%Y%m%d_%H%M%S)" \
     --overwrite \
     --batch_size=64 \
-    --checkpoint_base_dir=checkpoints/ \
     --num_train_steps=50000 \
     --weight_loader.params_path=gs://openpi-assets/checkpoints/pi0_base/params
 
