@@ -93,8 +93,8 @@ class DataConfig:
     # Only used for RLDS data loader (ie currently only used for DROID).
     rlds_data_dir: str | None = None
 
-    # If true, will use behavior lerobot dataset
-    behavior_dataset: bool = False
+    # Only used for B1K data loader.
+    behavior_dataset_root: str | None = None
 
     # Action space for DROID dataset.
     action_space: droid_rlds_dataset.DroidActionSpace | None = None
@@ -604,11 +604,11 @@ _CONFIGS = [
         project_name = "B1K",
         model=pi0.Pi0Config(action_horizon=50, paligemma_variant="gemma_2b_lora"),
         data=LeRobotB1KDataConfig(
-            repo_id="behavior-1k/B50",
+            repo_id="behavior-1k/2025-challenge-demos",
             base_config=DataConfig(
                 prompt_from_task=True,
                 episodes_index=list(range(190)),
-                behavior_dataset=True,
+                behavior_dataset_root="~/behavior",
             ),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
@@ -617,7 +617,7 @@ _CONFIGS = [
              action_horizon=50, paligemma_variant="gemma_2b_lora"
         ).get_freeze_filter(),
         ema_decay=None,
-        val_repo_id="behavior-1k/B50",
+        val_repo_id="behavior-1k/2025-challenge-demos",
         val_episodes_index=list(range(190, 200)),
     ),
     

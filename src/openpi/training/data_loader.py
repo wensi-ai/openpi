@@ -132,13 +132,14 @@ def create_behavior_dataset(data_config: _config.DataConfig, action_horizon: int
     
     dataset = BehaviorLeRobotDataset(
         repo_id=data_config.repo_id,
-        root="/vision/group/behavior",
+        root=data_config.behavior_dataset_root,
         tasks=["turning_on_radio"],
         modalities=["rgb"],
         local_only=True,
         delta_timestamps={
             key: [t / 30.0 for t in range(action_horizon)] for key in data_config.action_sequence_keys
-        }
+        },
+        episodes=data_config.episodes_index,
     )
 
     if data_config.prompt_from_task:

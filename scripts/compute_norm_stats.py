@@ -110,11 +110,11 @@ def extract_state_from_proprio(proprio_data):
 def main(config_name: str, max_frames: int | None = None):
     config = _config.get_config(config_name)
     data_config = config.data.create(config.assets_dirs, config.model)
-    if data_config.behavior_dataset:
+    if data_config.behavior_dataset_root:
         from omnigibson.learning.datas import BehaviorLerobotDatasetMetadata
         metadata = BehaviorLerobotDatasetMetadata(
-            repo_id=data_config.repo_id, 
-            root="/vision/group/behavior", 
+            repo_id=data_config.repo_id,
+            root=data_config.behavior_dataset_root,
             tasks=["turning_on_radio"],
             modalities=[], 
             cameras=[]
