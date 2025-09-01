@@ -422,7 +422,7 @@ def main(config: _config.TrainConfig):
         config,
         sharding=data_sharding,
         shuffle=True,
-        skip_norm_stats=True
+        skip_norm_stats=False
     )
     data_iter = iter(data_loader)
     batch = next(data_iter)

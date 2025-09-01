@@ -96,5 +96,5 @@ class B1kInputs(transforms.DataTransformFn):
 class B1kOutputs(transforms.DataTransformFn):
     action_dim: int = 23
     def __call__(self, data: dict) -> dict:
-        # Only return the first 8 dims.
+        # Only return the first 23 dims.
         return {"actions": np.asarray(data["actions"][:, :self.action_dim])}

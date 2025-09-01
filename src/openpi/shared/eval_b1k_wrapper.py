@@ -1,41 +1,23 @@
 import numpy as np
 import torch
+from openpi_client.base_policy import BasePolicy
 from openpi_client.image_tools import resize_with_pad
 from collections import deque
-from openpi_client import websocket_client_policy as _websocket_client_policy
-import logging
 import copy
 RESIZE_SIZE = 224
 
-class OpenPIWrapper():
+class B1KPolicyWrapper():
     def __init__(
         self, 
-        host, 
-        port, 
-        text_prompt : str = "put the white cup on the coffee machine",
+        policy: BasePolicy,
+        text_prompt : str = "turning on radio",
         control_mode : str = "temporal_ensemble",
     ) -> None:
-        """
-        Args:
-            model_ckpt_folder: str, path to the model checkpoint folder
-            ckpt_id: int, checkpoint id
-            device: str, device to run the model on
-            text_prompt: str, text prompt to use for the model
-        Example:
-        model_ckpt_folder = "/home/mfu/research/openpi/checkpoints/pi0_fast_yumi/pi0_fast_yumi_finetune"
-        ckpt_id = 29999
-        device = "cuda"
-        """
-        # Create a trained policy.
-        self.policy = _websocket_client_policy.WebsocketClientPolicy(
-            host=host,
-            port=port,
-        )
-        logging.info(f"Server metadata: {self.policy.get_server_metadata()}")
+        self.policy = policy
         self.text_prompt = text_prompt
         self.control_mode = control_mode
         self.action_queue = deque([],maxlen=10)
-        self.last_action = np.zeros((10, 21), dtype=np.float64)
+        self.last_action = {"actions": np.zeros((10, 23), dtype=np.float64)}
         self.max_len = 8
         
         self.replan_interval = 10             # K: replan every 10 steps
@@ -45,7 +27,7 @@ class OpenPIWrapper():
     
     def reset(self):
         self.action_queue = deque([],maxlen=10)
-        self.last_action = np.zeros((10, 21), dtype=np.float64)
+        self.last_action = {"actions": np.zeros((10, 23), dtype=np.float64)}
         self.step_counter = 0
     
     def generate_prop_state(self, proprio_data):
@@ -66,11 +48,23 @@ class OpenPIWrapper():
         Process the observation dictionary to match the expected input format for the model.
         """
         prop_state = self.generate_prop_state(obs["robot_r1::proprio"][None])
-        img_obs = torch.stack(
+        img_obs = np.stack(
             [
-                obs["robot_r1::robot_r1:zed_link:Camera:0::rgb"][None, ..., :3],
-                obs["robot_r1::robot_r1:left_realsense_link:Camera:0::rgb"][None, ..., :3],
-                obs["robot_r1::robot_r1:right_realsense_link:Camera:0::rgb"][None, ..., :3],
+                resize_with_pad(
+                    obs["robot_r1::robot_r1:zed_link:Camera:0::rgb"][None, ..., :3],
+                     RESIZE_SIZE,
+                    RESIZE_SIZE
+                ),
+                resize_with_pad(
+                    obs["robot_r1::robot_r1:left_realsense_link:Camera:0::rgb"][None, ..., :3], 
+                    RESIZE_SIZE,
+                    RESIZE_SIZE
+                ),
+                resize_with_pad(
+                    obs["robot_r1::robot_r1:right_realsense_link:Camera:0::rgb"][None, ..., :3],
+                    RESIZE_SIZE,
+                    RESIZE_SIZE
+                ),
             ],
             axis=1,
         )
@@ -92,19 +86,19 @@ class OpenPIWrapper():
 
             joint_positions = nbatch["proprio"][0, -1]
             batch = {
-                "observation/egocentric_camera": resize_with_pad(nbatch["observation"][0, 0], RESIZE_SIZE, RESIZE_SIZE),
-                "observation/wrist_image_left": resize_with_pad(nbatch["observation"][0, 1], RESIZE_SIZE, RESIZE_SIZE),
-                "observation/wrist_image_right": resize_with_pad(nbatch["observation"][0, 2], RESIZE_SIZE, RESIZE_SIZE),
-                "observation/joint_position": joint_positions,
+                "observation/egocentric_camera": nbatch["observation"][0, 0],
+                "observation/wrist_image_left": nbatch["observation"][0, 1],
+                "observation/wrist_image_right": nbatch["observation"][0, 2],
+                "observation/state": joint_positions,
                 "prompt": self.text_prompt,
             }
 
             try:
                 action = self.policy.infer(batch)
                 self.last_action = action
-            except:
+            except Exception as e:
                 action = self.last_action
-                print("Error in action prediction, using last action")
+                print(f"Error in action prediction, using last action: {e}")
 
             target_joint_positions = action["actions"].copy()
 
@@ -176,7 +170,6 @@ class OpenPIWrapper():
             Shape: (10, 16)
         """
         input_obs = self.process_obs(input_obs)
-        
         if self.control_mode == 'receeding_temporal':
             return self.act_receeding_temporal(input_obs)
         
@@ -187,42 +180,28 @@ class OpenPIWrapper():
                 return final_action[..., :23]
         
         nbatch = copy.deepcopy(input_obs)
-        # update nbatch observation (B, T, num_cameras, H, W, C) -> (B, num_cameras, H, W, C)
-        nbatch["observation"] = nbatch["observation"][:, -1] # only use the last observation step
-        if nbatch["observation"].shape[-1] != 3:
+        if nbatch["observation"].shape[-1] != 3: 
             # make B, num_cameras, H, W, C  from B, num_cameras, C, H, W
             # permute if pytorch
             nbatch["observation"] = np.transpose(nbatch["observation"], (0, 1, 3, 4, 2))
 
-        # nbatch["proprio"] is B, T, 16, where B=1
-        joint_positions = nbatch["proprio"][0, -1]
+        # nbatch["proprio"] is B, 16, where B=1
+        joint_positions = nbatch["proprio"][0]
         batch = {
-            "observation/egocentric_camera": resize_with_pad(
-                nbatch["observation"][0, 0], 
-                RESIZE_SIZE,
-                RESIZE_SIZE
-            ),
-            "observation/wrist_image_left": resize_with_pad(
-                nbatch["observation"][0, 1], 
-                RESIZE_SIZE,
-                RESIZE_SIZE
-            ),
-            "observation/wrist_image_right": resize_with_pad(
-                nbatch["observation"][0, 2], 
-                RESIZE_SIZE,
-                RESIZE_SIZE
-            ),
-            "observation/joint_position": joint_positions,
+            "observation/egocentric_camera": nbatch["observation"][0, 0],
+            "observation/wrist_image_left": nbatch["observation"][0, 1],
+            "observation/wrist_image_right": nbatch["observation"][0, 2],
+            "observation/state": joint_positions,
             "prompt": self.text_prompt,
         }
         try:
             action = self.policy.infer(batch) 
             self.last_action = action
-        except:
+        except Exception as e:
             action = self.last_action
-            print("Error in action prediction, using last action")
+            raise e
         # convert to absolute action and append gripper command
-        # action["actions"] shape: (10, 21), joint_positions shape: (21,)
+        # action shape: (10, 23), joint_positions shape: (23,)
         # Need to broadcast joint_positions to match action sequence length
         target_joint_positions = action["actions"].copy() 
         if self.control_mode == 'receeding_horizon':
@@ -250,4 +229,4 @@ class OpenPIWrapper():
         else:
             final_action = target_joint_positions
             
-        return final_action[..., :23]
+        return torch.from_numpy(final_action[..., :23])
