@@ -5,6 +5,7 @@ import numpy as np
 
 from openpi import transforms
 from openpi.models import model as _model
+from omnigibson.learning.utils.eval_utils import PROPRIOCEPTION_INDICES
 
 
 def make_b1k_example() -> dict:
@@ -16,6 +17,27 @@ def make_b1k_example() -> dict:
         "observation/joint_position": np.random.rand(21),
         "prompt": "do something",
     }
+
+
+def extract_state_from_proprio(proprio_data):
+    """
+    We assume perfect correlation for the two gripper fingers.
+    """
+    # extract joint position
+    base_qvel = proprio_data[..., PROPRIOCEPTION_INDICES["R1Pro"]["base_qvel"]]  # 3
+    trunk_qpos = proprio_data[..., PROPRIOCEPTION_INDICES["R1Pro"]["trunk_qpos"]]  # 4
+    arm_left_qpos = proprio_data[..., PROPRIOCEPTION_INDICES["R1Pro"]["arm_left_qpos"]]  #  7
+    arm_right_qpos = proprio_data[..., PROPRIOCEPTION_INDICES["R1Pro"]["arm_right_qpos"]]  #  7
+    left_gripper_width = proprio_data[..., PROPRIOCEPTION_INDICES["R1Pro"]["gripper_left_qpos"]].sum(axis=-1, keepdims=True)  # 1
+    right_gripper_width = proprio_data[..., PROPRIOCEPTION_INDICES["R1Pro"]["gripper_right_qpos"]].sum(axis=-1, keepdims=True)  # 1
+    return np.concatenate([
+        base_qvel,
+        trunk_qpos,
+        arm_left_qpos,
+        arm_right_qpos,
+        left_gripper_width,
+        right_gripper_width,
+    ], axis=-1)
 
 
 def _parse_image(image) -> np.ndarray:
@@ -39,20 +61,7 @@ class B1kInputs(transforms.DataTransformFn):
 
         proprio_data = data["observation/state"]
         # extract joint position
-        base_qvel = proprio_data[246:249] # 3
-        trunk_qpos = proprio_data[238:242] # 4
-        arm_left_qpos = proprio_data[158:165] #  7
-        arm_right_qpos = proprio_data[198:205] #  7
-        left_gripper_width = proprio_data[194:196].sum(axis=-1, keepdims=True) # 1
-        right_gripper_width = proprio_data[234:236].sum(axis=-1, keepdims=True) # 1
-        state = np.concatenate([
-            base_qvel,
-            trunk_qpos,
-            arm_left_qpos,
-            arm_right_qpos,
-            left_gripper_width,
-            right_gripper_width,
-        ])
+        state = extract_state_from_proprio(proprio_data)
         state = transforms.pad_to_dim(state, self.action_dim)
         if "actions" in data:
             action =  data["actions"]

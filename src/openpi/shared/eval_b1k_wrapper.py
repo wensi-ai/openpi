@@ -4,7 +4,8 @@ from openpi_client.base_policy import BasePolicy
 from openpi_client.image_tools import resize_with_pad
 from collections import deque
 import copy
-from omnigibson.learning.utils.eval_utils import PROPRIOCEPTION_INDICES
+from openpi.policies.b1k_policy import extract_state_from_proprio
+
 RESIZE_SIZE = 224
 
 class B1KPolicyWrapper():
@@ -30,25 +31,12 @@ class B1KPolicyWrapper():
         self.action_queue = deque([],maxlen=10)
         self.last_action = {"actions": np.zeros((10, 23), dtype=np.float64)}
         self.step_counter = 0
-    
-    def generate_prop_state(self, proprio_data):
-        base_qvel = proprio_data[:, PROPRIOCEPTION_INDICES["R1Pro"]["base_qvel"]]  # 3
-        trunk_qpos = proprio_data[:, PROPRIOCEPTION_INDICES["R1Pro"]["trunk_qpos"]]  # 4
-        arm_left_qpos = proprio_data[:, PROPRIOCEPTION_INDICES["R1Pro"]["arm_left_qpos"]]  #  7
-        arm_right_qpos = proprio_data[:, PROPRIOCEPTION_INDICES["R1Pro"]["arm_right_qpos"]]  #  7
-        left_gripper_width = proprio_data[:, PROPRIOCEPTION_INDICES["R1Pro"]["gripper_left_qpos"]].sum(axis=-1)[:, None]  # 1
-        right_gripper_width = proprio_data[:, PROPRIOCEPTION_INDICES["R1Pro"]["gripper_right_qpos"]].sum(axis=-1)[:, None]  # 1
-
-        prop_state = np.concatenate(
-            (base_qvel, trunk_qpos, arm_left_qpos, arm_right_qpos, left_gripper_width, right_gripper_width), axis=-1
-        )  # 23
-        return prop_state
 
     def process_obs(self, obs: dict) -> dict:
         """
         Process the observation dictionary to match the expected input format for the model.
         """
-        prop_state = self.generate_prop_state(obs["robot_r1::proprio"][None])
+        prop_state = extract_state_from_proprio(obs["robot_r1::proprio"][None])
         img_obs = np.stack(
             [
                 resize_with_pad(

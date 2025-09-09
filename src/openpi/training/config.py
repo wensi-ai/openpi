@@ -5,6 +5,7 @@ from collections.abc import Sequence
 import dataclasses
 import difflib
 import logging
+import os
 import pathlib
 from typing import Any, Literal, List, Protocol, TypeAlias
 
@@ -394,7 +395,7 @@ class LeRobotB1KDataConfig(DataConfigFactory):
         model_transforms = ModelTransformFactory()(model_config)
 
         return dataclasses.replace(
-            self.create_base_config(assets_dirs),
+            self.create_base_config(assets_dirs, model_config),
             repack_transforms=repack_transform,
             data_transforms=data_transforms,
             model_transforms=model_transforms,
@@ -695,24 +696,27 @@ _CONFIGS = [
         name="pi0_b1k",
         exp_name="openpi",
         project_name="B1K",
-        model=pi0.Pi0Config(action_horizon=50, paligemma_variant="gemma_2b_lora"),
+        model=pi0_config.Pi0Config(action_horizon=50, paligemma_variant="gemma_2b_lora"),
         data=LeRobotB1KDataConfig(
             repo_id="behavior-1k/2025-challenge-demos",
             base_config=DataConfig(
                 prompt_from_task=True,
                 episodes_index=list(range(190)),
-                behavior_dataset_root="/scr/behavior/2025-challenge-demos",
+                behavior_dataset_root="/vision/group/behavior/2025-challenge-demos",
             ),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
         num_train_steps=50_000,
-        freeze_filter=pi0.Pi0Config(
+        freeze_filter=pi0_config.Pi0Config(
              action_horizon=50, paligemma_variant="gemma_2b_lora"
         ).get_freeze_filter(),
         ema_decay=None,
+        val_log_interval=2500,
         val_repo_id="behavior-1k/2025-challenge-demos",
         val_episodes_index=list(range(190, 200)),
-        num_workers=32,
+        assets_base_dir="./outputs/assets",
+        checkpoint_base_dir="./outputs/checkpoints",
+        num_workers=min(32, os.cpu_count() - 2),
     ),
     
     #

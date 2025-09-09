@@ -86,32 +86,12 @@ def create_rlds_dataloader(
     return data_loader, num_batches
 
 
-def extract_state_from_proprio(proprio_data):
-    """
-    We assume perfect correlation for the two gripper fingers.
-    """
-    # extract joint position
-    base_qvel = proprio_data[246:249] # 3
-    trunk_qpos = proprio_data[238:242] # 4
-    arm_left_qpos = proprio_data[158:165] #  7
-    arm_right_qpos = proprio_data[198:205] #  7
-    left_gripper_width = proprio_data[194:196].sum(axis=-1, keepdims=True) # 1
-    right_gripper_width = proprio_data[234:236].sum(axis=-1, keepdims=True) # 1
-    return np.concatenate([
-        base_qvel,
-        trunk_qpos,
-        arm_left_qpos,
-        arm_right_qpos,
-        left_gripper_width,
-        right_gripper_width,
-    ])
-
-
 def main(config_name: str, max_frames: int | None = None):
     config = _config.get_config(config_name)
     data_config = config.data.create(config.assets_dirs, config.model)
     if data_config.behavior_dataset_root:
         from omnigibson.learning.datas import BehaviorLerobotDatasetMetadata
+        from openpi.policies.b1k_policy import extract_state_from_proprio
         metadata = BehaviorLerobotDatasetMetadata(
             repo_id=data_config.repo_id,
             root=data_config.behavior_dataset_root,
@@ -119,12 +99,12 @@ def main(config_name: str, max_frames: int | None = None):
             modalities=[], 
             cameras=[]
         )
-        norm_stats = {"state": {}, "action": {}}
+        norm_stats = {"state": {}, "actions": {}}
         for key in ["mean", "std", "q01", "q99"]:
             norm_stats["state"][key] = transforms.pad_to_dim(
                 extract_state_from_proprio(metadata.stats["observation.state"][key]), config.model.action_dim
             )
-            norm_stats["action"][key] = transforms.pad_to_dim(
+            norm_stats["actions"][key] = transforms.pad_to_dim(
                 metadata.stats["action"][key], config.model.action_dim
             )
     else:
