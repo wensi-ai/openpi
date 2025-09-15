@@ -14,34 +14,35 @@ class B1KPolicyWrapper():
         policy: BasePolicy,
         text_prompt : str = "Turn on the radio receiver that's on the table in the living room.",
         control_mode : str = "temporal_ensemble",
+        action_horizon : int = 10,
     ) -> None:
         self.policy = policy
         self.text_prompt = text_prompt
         self.control_mode = control_mode
-        self.action_queue = deque([],maxlen=10)
-        self.last_action = {"actions": np.zeros((10, 23), dtype=np.float64)}
-        self.max_len = 8
+        self.action_queue = deque([], maxlen=action_horizon)
+        self.last_action = {"actions": np.zeros((action_horizon, 23), dtype=np.float64)}
+        self.action_horizon = action_horizon
         
-        self.replan_interval = 10             # K: replan every 10 steps
+        self.replan_interval = action_horizon # K: replan every 10 steps
         self.max_len = 50                     # how long the policy sequences are
         self.temporal_ensemble_max = 5        # max number of sequences to ensemble
         self.step_counter = 0
     
     def reset(self):
-        self.action_queue = deque([],maxlen=10)
-        self.last_action = {"actions": np.zeros((10, 23), dtype=np.float64)}
+        self.action_queue = deque([],maxlen=self.action_horizon)
+        self.last_action = {"actions": np.zeros((self.action_horizon, 23), dtype=np.float64)}
         self.step_counter = 0
 
     def process_obs(self, obs: dict) -> dict:
         """
         Process the observation dictionary to match the expected input format for the model.
         """
-        prop_state = extract_state_from_proprio(obs["robot_r1::proprio"][None])
+        prop_state = obs["robot_r1::proprio"][None]
         img_obs = np.stack(
             [
                 resize_with_pad(
                     obs["robot_r1::robot_r1:zed_link:Camera:0::rgb"][None, ..., :3],
-                     RESIZE_SIZE,
+                    RESIZE_SIZE,
                     RESIZE_SIZE
                 ),
                 resize_with_pad(

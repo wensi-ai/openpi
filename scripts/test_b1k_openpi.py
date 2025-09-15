@@ -1,9 +1,10 @@
 from openpi.training import config
-from openpi.policies import policy_config
-from openpi.shared import download
 import numpy as np
-from openpi.policies import b1k_policy
-from openpi.shared.eval_b1k_wrapper import OpenPIWrapper
+from openpi.policies import policy_config
+from openpi.shared.eval_b1k_wrapper import B1KPolicyWrapper
+from openpi.policies.b1k_policy import extract_state_from_proprio
+from omnigibson.learning.datas import BehaviorLeRobotDataset
+from openpi_client.image_tools import resize_with_pad
 
 # example = b1k_policy.make_b1k_example()
 # print("\n=== Example Contents ===")
@@ -18,32 +19,31 @@ from openpi.shared.eval_b1k_wrapper import OpenPIWrapper
 #         print(f"   Value: {value}")
 # print("-" * 50 + "\n")
 
-config = config.get_config("pi0_fast_sim_b1k_450")
-checkpoint_dir = "/svl/u/ravenh/openpi/openpi_checkpoints/pi0_fast_sim_b1k_450/pi0_fast_sim_b1k_450"
+checkpoint_dir = "/home/svl/Research/libs/openpi/outputs/checkpoints/pi0_b1k/openpi/49999"
+policy = policy_config.create_trained_policy(
+    config.get_config("pi0_b1k"), checkpoint_dir
+)
+openpi_policy = B1KPolicyWrapper(policy, control_mode="receeding_horizon", action_horizon=1)
 
-openpi_policy = OpenPIWrapper(
-    model_ckpt_folder = checkpoint_dir,
-    ckpt_id=29999,
-    text_prompt="pick up the green mug",
+
+ds = BehaviorLeRobotDataset(
+    repo_id="behavior-1k/2025-challenge-demos",
+    root="/scr/behavior/2025-challenge-demos",
+    tasks=["turning_on_radio"],
+    modalities=["rgb"],
+    local_only=True,
+    shuffle=False,
 )
 
-import h5py
-path = "/svl/u/mengdixu/b1k-datagen/mimicgen/datasets/demo_450.hdf5"
-data = h5py.File(path, "r")
-demo_0 = data["data/demo_0"]
-obs_ego = demo_0["obs/robot_r1::robot_r1:eyes:Camera:0::rgb"][0,:,:,:3]
-obs_wrist_left = demo_0["obs/robot_r1::robot_r1:left_eef_link:Camera:0::rgb"][0,:,:,:3]
-obs_wrist_right = demo_0["obs/robot_r1::robot_r1:right_eef_link:Camera:0::rgb"][0,:,:,:3]
-obs = np.stack([obs_ego, obs_wrist_left, obs_wrist_right], axis=0)  #(num_cameras, H, W, C) 
-obs = obs[None, None]  #(B, T, num_cameras, H, W, C) 
-proprio = demo_0["obs/prop_state"][0,:][None,None] # (B, T, 21)
-example = {
-    "observation": obs,
-    "proprio": proprio,
-}
-action = openpi_policy.act(example)
-first_action = {key: value[0] for key, value in action.items()}
-first_action = np.concatenate([v for v in first_action.values()])
-gt_action  = demo_0["actions"][0,:]
-print(gt_action)
+def get_action(idx: int):
+    data = ds[idx]
+    gt_action  = data["action"]
+    example = {
+        "robot_r1::robot_r1:zed_link:Camera:0::rgb": data["observation.images.rgb.head"].permute(1, 2, 0).numpy(),
+        "robot_r1::robot_r1:left_realsense_link:Camera:0::rgb": data["observation.images.rgb.left_wrist"].permute(1, 2, 0).numpy(),
+        "robot_r1::robot_r1:right_realsense_link:Camera:0::rgb": data["observation.images.rgb.right_wrist"].permute(1, 2, 0).numpy(),
+        "robot_r1::proprio": data["observation.state"],
+    }
+    return openpi_policy.act(example), gt_action
 
+breakpoint()

@@ -14,7 +14,7 @@ def make_b1k_example() -> dict:
         "observation/egocentric_camera": np.random.randint(256, size=(224, 224, 3), dtype=np.uint8),
         "observation/wrist_image_left": np.random.randint(256, size=(224, 224, 3), dtype=np.uint8),
         "observation/wrist_image_right": np.random.randint(256, size=(224, 224, 3), dtype=np.uint8),
-        "observation/joint_position": np.random.rand(21),
+        "observation/joint_position": np.random.rand(23),
         "prompt": "do something",
     }
 
@@ -62,10 +62,8 @@ class B1kInputs(transforms.DataTransformFn):
         proprio_data = data["observation/state"]
         # extract joint position
         state = extract_state_from_proprio(proprio_data)
-        state = transforms.pad_to_dim(state, self.action_dim)
         if "actions" in data:
             action =  data["actions"]
-            action = transforms.pad_to_dim(action, self.action_dim)
 
         # Possibly need to parse images to uint8 (H,W,C) since LeRobot automatically
         # stores as float32 (C,H,W), gets skipped for policy inference
