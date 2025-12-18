@@ -101,21 +101,28 @@ def maybe_download(url: str, *, force_download: bool = False, **kwargs) -> pathl
 
     return local_path
 
-
 def _download_fsspec(url: str, local_path: pathlib.Path, **kwargs) -> None:
     """Download a file from a remote filesystem to the local cache, and return the local path."""
+    # minimal fix: force anonymous access for public GCS
     if url.startswith("gs://"):
         kwargs.setdefault("token", "anon")
-    fs, _ = fsspec.core.url_to_fs(url, **kwargs)
-    info = fs.info(url)
+
+    # use the fs_path returned by url_to_fs
+    fs, fs_path = fsspec.core.url_to_fs(url, **kwargs)
+
+    # use fs_path (not the full url) for info / du / get calls
+    info = fs.info(fs_path)
     # Folders are represented by 0-byte objects with a trailing forward slash.
     if is_dir := (
         info["type"] == "directory"
         or (info["size"] == 0 and info["name"].endswith("/"))
     ):
-        total_size = fs.du(url)
+        total_size = fs.du(fs_path)
     else:
         total_size = info["size"]
+
+    local_path = pathlib.Path(local_path)
+    local_path.parent.mkdir(parents=True, exist_ok=True)
 
     with tqdm.tqdm(
         total=total_size,
@@ -124,7 +131,7 @@ def _download_fsspec(url: str, local_path: pathlib.Path, **kwargs) -> None:
         unit_divisor=1024,
     ) as pbar:
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        future = executor.submit(fs.get, url, local_path, recursive=is_dir)
+        future = executor.submit(fs.get, fs_path, str(local_path), recursive=is_dir)
 
         while not future.done():
             current_size = sum(
@@ -135,7 +142,10 @@ def _download_fsspec(url: str, local_path: pathlib.Path, **kwargs) -> None:
             pbar.update(current_size - pbar.n)
             time.sleep(1)
 
+        # raise any exception from the worker
+        future.result()
         pbar.update(total_size - pbar.n)
+
 
 
 
