@@ -105,15 +105,11 @@ class PI1Pytorch(nn.Module):
     def gradient_checkpointing_enable(self):
         """Enable gradient checkpointing for memory optimization."""
         self.gradient_checkpointing_enabled = True
-        if hasattr(self.dino_with_expert.gemma_model.model, "gradient_checkpointing"):
-            self.dino_with_expert.gemma_model.model.gradient_checkpointing = True
         logging.info("Enabled gradient checkpointing for PI1Pytorch model")
 
     def gradient_checkpointing_disable(self):
         """Disable gradient checkpointing."""
         self.gradient_checkpointing_enabled = False
-        if hasattr(self.dino_with_expert.gemma_model.model, "gradient_checkpointing"):
-            self.dino_with_expert.gemma_model.model.gradient_checkpointing = False
         logging.info("Disabled gradient checkpointing for PI1Pytorch model")
 
     def is_gradient_checkpointing_enabled(self):
@@ -283,10 +279,8 @@ class PI1Pytorch(nn.Module):
 
         prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(images, img_masks)
         suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self.embed_suffix(state, x_t, time)
-        if (
-            self.dino_with_expert.gemma_model.model.layers[0].self_attn.q_proj.weight.dtype
-            == torch.bfloat16
-        ):
+        # Convert to bfloat16 if model uses bfloat16
+        if next(self.dino_with_expert.action_transformer_blocks[0].parameters()).dtype == torch.bfloat16:
             suffix_embs = suffix_embs.to(dtype=torch.bfloat16)
             prefix_embs = prefix_embs.to(dtype=torch.bfloat16)
 
@@ -340,17 +334,18 @@ class PI1Pytorch(nn.Module):
         prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
         prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
 
-        # Compute image key value cache
+        # Process prefix embeddings (DINOv2 blocks don't support KV caching, so we store the processed prefix)
         prefix_att_2d_masks_4d = self._prepare_attention_masks_4d(prefix_att_2d_masks)
-        self.dino_with_expert.gemma_model.model.config._attn_implementation = "eager"  # noqa: SLF001
 
-        _, past_key_values = self.dino_with_expert.forward(
+        prefix_output, _ = self.dino_with_expert.forward(
             attention_mask=prefix_att_2d_masks_4d,
             position_ids=prefix_position_ids,
             past_key_values=None,
             inputs_embeds=[prefix_embs, None],
-            use_cache=True,
+            use_cache=False,  # DINOv2 blocks don't support caching
         )
+        # Store processed prefix for use in denoise_step
+        processed_prefix = prefix_output[0]  # [B, prefix_len, embed_dim]
 
         dt = -1.0 / num_steps
         dt = torch.tensor(dt, dtype=torch.float32, device=device)
@@ -362,7 +357,7 @@ class PI1Pytorch(nn.Module):
             v_t = self.denoise_step(
                 state,
                 prefix_pad_masks,
-                past_key_values,
+                processed_prefix,
                 x_t,
                 expanded_time,
             )
@@ -376,7 +371,7 @@ class PI1Pytorch(nn.Module):
         self,
         state,
         prefix_pad_masks,
-        past_key_values,
+        processed_prefix,
         x_t,
         timestep,
     ):
@@ -385,32 +380,47 @@ class PI1Pytorch(nn.Module):
 
         suffix_len = suffix_pad_masks.shape[1]
         batch_size = prefix_pad_masks.shape[0]
-        prefix_len = prefix_pad_masks.shape[1]
+        prefix_len = processed_prefix.shape[1]
 
-        prefix_pad_2d_masks = prefix_pad_masks[:, None, :].expand(batch_size, suffix_len, prefix_len)
+        # Concatenate processed prefix with suffix embeddings
+        all_embeds = torch.cat([processed_prefix, suffix_embs], dim=1)
 
+        # Create attention masks: prefix can attend to prefix, suffix can attend to both
+        prefix_att_mask = make_att_2d_masks(prefix_pad_masks, torch.zeros_like(prefix_pad_masks, dtype=torch.bool))
         suffix_att_2d_masks = make_att_2d_masks(suffix_pad_masks, suffix_att_masks)
+        
+        # Create full attention mask: [prefix, suffix] x [prefix, suffix]
+        prefix_to_prefix = prefix_att_mask  # [B, prefix_len, prefix_len]
+        prefix_to_suffix = torch.zeros(batch_size, prefix_len, suffix_len, dtype=torch.bool, device=prefix_pad_masks.device)
+        suffix_to_prefix = torch.ones(batch_size, suffix_len, prefix_len, dtype=torch.bool, device=prefix_pad_masks.device)  # Suffix can attend to prefix
+        suffix_to_suffix = suffix_att_2d_masks  # [B, suffix_len, suffix_len]
+        
+        # Combine into full mask
+        top_row = torch.cat([prefix_to_prefix, prefix_to_suffix], dim=2)  # [B, prefix_len, prefix_len + suffix_len]
+        bottom_row = torch.cat([suffix_to_prefix, suffix_to_suffix], dim=2)  # [B, suffix_len, prefix_len + suffix_len]
+        full_att_2d_masks = torch.cat([top_row, bottom_row], dim=1)  # [B, prefix_len + suffix_len, prefix_len + suffix_len]
 
-        full_att_2d_masks = torch.cat([prefix_pad_2d_masks, suffix_att_2d_masks], dim=2)
-
+        # Create position IDs
+        prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
         prefix_offsets = torch.sum(prefix_pad_masks, dim=-1)[:, None]
-        position_ids = prefix_offsets + torch.cumsum(suffix_pad_masks, dim=1) - 1
+        suffix_position_ids = prefix_offsets + torch.cumsum(suffix_pad_masks, dim=1) - 1
+        position_ids = torch.cat([prefix_position_ids, suffix_position_ids], dim=1)
 
         # Prepare attention masks
         full_att_2d_masks_4d = self._prepare_attention_masks_4d(full_att_2d_masks)
-        self.dino_with_expert.gemma_model.model.config._attn_implementation = "eager"  # noqa: SLF001
 
+        # Process concatenated embeddings through DINOv2 transformer
         outputs_embeds, _ = self.dino_with_expert.forward(
             attention_mask=full_att_2d_masks_4d,
             position_ids=position_ids,
-            past_key_values=past_key_values,
-            inputs_embeds=[None, suffix_embs],
+            past_key_values=None,
+            inputs_embeds=[all_embeds, None],
             use_cache=False,
             adarms_cond=[None, adarms_cond],
         )
 
-        suffix_out = outputs_embeds[1]
+        # Extract suffix output
+        suffix_out = outputs_embeds[0][:, prefix_len:]
         suffix_out = suffix_out[:, -self.config.action_horizon :]
         suffix_out = suffix_out.to(dtype=torch.float32)
         return self.action_out_proj(suffix_out)
-

@@ -1,18 +1,21 @@
+from functools import partial
 from typing import Literal
 
 import pytest
 import torch
 from torch import nn
-from transformers import GemmaForCausalLM
-from transformers.models.auto import CONFIG_MAPPING
 
-from dinov2.hub.backbones import dinov2_vits14_reg
+from dinov2.dinov2.hub.backbones import dinov2_vits14_reg
+from dinov2.dinov2.layers import NestedTensorBlock, MemEffAttention, Mlp
 
 import openpi.models.gemma as _gemma
 
 
 class DinoWithExpertModel(nn.Module):
-    """DINOv2 vision encoder with Gemma action expert, matching PaliGemmaWithExpertModel interface."""
+    """DINOv2 vision encoder with DINOv2-style transformer for actions.
+    
+    Language input is accepted for compatibility but not processed (treated as dummy).
+    """
 
     def __init__(
         self,
@@ -29,33 +32,44 @@ class DinoWithExpertModel(nn.Module):
         self.dino = dinov2_vits14_reg(pretrained=True)
         dino_embed_dim = self.dino.embed_dim
 
-        # Project DINOv2 outputs to Gemma width
+        # Project DINOv2 outputs to target width
         self.image_proj = nn.Linear(dino_embed_dim, vlm_config.width)
 
-        # Action expert (Gemma) - same as PaliGemmaWithExpertModel
-        action_expert_config_hf = CONFIG_MAPPING["gemma"](
-            head_dim=action_expert_config.head_dim,
-            hidden_size=action_expert_config.width,
-            intermediate_size=action_expert_config.mlp_dim,
-            num_attention_heads=action_expert_config.num_heads,
-            num_hidden_layers=action_expert_config.depth,
-            num_key_value_heads=action_expert_config.num_kv_heads,
-            vocab_size=257152,
-            hidden_activation="gelu_pytorch_tanh",
-            torch_dtype="float32",
-            use_adarms=use_adarms[1],
-            adarms_cond_dim=action_expert_config.width if use_adarms[1] else None,
-        )
-
-        # Gemma model for processing both prefix (image embeddings) and suffix (action embeddings)
-        # We use the same Gemma model for both since DINOv2 doesn't have a language model
-        self.gemma_model = GemmaForCausalLM(config=action_expert_config_hf)
-        self.gemma_model.model.embed_tokens = None
+        # DINOv2-style transformer for processing actions
+        # Use same architecture as DINOv2 but for sequence processing
+        embed_dim = action_expert_config.width
+        depth = action_expert_config.depth
+        num_heads = action_expert_config.num_heads
+        mlp_ratio = action_expert_config.mlp_dim / action_expert_config.width
+        
+        # Create transformer blocks using DINOv2's NestedTensorBlock architecture
+        # NestedTensorBlock extends Block and works with regular tensors too
+        norm_layer = partial(nn.LayerNorm, eps=1e-6)
+        blocks_list = [
+            NestedTensorBlock(
+                dim=embed_dim,
+                num_heads=num_heads,
+                mlp_ratio=mlp_ratio,
+                qkv_bias=True,
+                proj_bias=True,
+                ffn_bias=True,
+                drop_path=0.0,
+                norm_layer=norm_layer,
+                act_layer=nn.GELU,
+                ffn_layer=Mlp,
+                attn_class=MemEffAttention,
+                init_values=None,
+            )
+            for _ in range(depth)
+        ]
+        self.action_transformer_blocks = nn.ModuleList(blocks_list)
+        self.action_norm = norm_layer(embed_dim)
 
         # Store config for reference
         self.vlm_config = vlm_config
         self.action_expert_config = action_expert_config
         self.use_adarms = use_adarms
+        self.embed_dim = embed_dim
 
         self.to_bfloat16_for_selected_params(precision)
 
@@ -72,9 +86,7 @@ class DinoWithExpertModel(nn.Module):
         # Keep certain parameters in float32 for numerical stability
         params_to_keep_float32 = [
             "image_proj",
-            "input_layernorm",
-            "post_attention_layernorm",
-            "model.norm",
+            "norm",
         ]
 
         for name, param in self.named_parameters():
@@ -82,13 +94,13 @@ class DinoWithExpertModel(nn.Module):
                 param.data = param.data.to(dtype=torch.float32)
 
     def embed_image(self, image: torch.Tensor):
-        """Embed images using DINOv2 and project to Gemma width.
+        """Embed images using DINOv2 and project to target width.
         
         Args:
             image: Image tensor of shape [B, C, H, W] or [B, H, W, C]
             
         Returns:
-            Image embeddings of shape [B, num_tokens, embed_dim] where embed_dim = vlm_config.width
+            Image embeddings of shape [B, num_tokens, embed_dim]
         """
         # Ensure [B, C, H, W] format
         if image.ndim != 4:
@@ -97,11 +109,9 @@ class DinoWithExpertModel(nn.Module):
             image = image.permute(0, 3, 1, 2)
 
         # Forward through DINOv2
-        # DINOv2 expects [B, C, H, W] format which we've already ensured above
         features = self.dino.forward_features(image)
         
         # Extract tokens: cls token, register tokens, and patch tokens
-        # x_norm_clstoken is [B, embed_dim], we need to add sequence dimension
         cls_token = features["x_norm_clstoken"].unsqueeze(1)  # [B, 1, embed_dim]
         reg_tokens = features["x_norm_regtokens"]  # [B, num_reg_tokens, embed_dim]
         patch_tokens = features["x_norm_patchtokens"]  # [B, num_patches, embed_dim]
@@ -109,21 +119,45 @@ class DinoWithExpertModel(nn.Module):
         # Concatenate all tokens: [cls, registers, patches]
         all_tokens = torch.cat([cls_token, reg_tokens, patch_tokens], dim=1)  # [B, 1+num_reg+num_patches, embed_dim]
         
-        # Project to Gemma width
+        # Project to target width
         image_embeds = self.image_proj(all_tokens)  # [B, num_tokens, vlm_config.width]
         
         return image_embeds
 
     def embed_language_tokens(self, tokens: torch.Tensor):
-        """Placeholder for language token embedding (not used in DINOv2 version).
+        """Dummy method for language tokens - accepts input but does not process it.
         
-        This method exists for interface compatibility but should not be called.
-        DINOv2 version only processes images, not language.
+        This method exists for interface compatibility. Language tokens are not processed
+        in the DINOv2-only version.
+        
+        Args:
+            tokens: Language token tensor (ignored)
+            
+        Returns:
+            None or dummy tensor (for compatibility)
         """
-        raise NotImplementedError(
-            "DinoWithExpertModel does not support language tokens. "
-            "Use embed_image() for image-only processing."
-        )
+        # Return None to indicate language is not processed
+        # The caller should handle this appropriately
+        return None
+
+    def _process_with_transformer(self, x, attention_mask=None):
+        """Process embeddings through DINOv2-style transformer blocks.
+        
+        Args:
+            x: Input embeddings [B, seq_len, embed_dim]
+            attention_mask: Optional attention mask (currently not used in DINOv2 blocks)
+            
+        Returns:
+            Processed embeddings [B, seq_len, embed_dim]
+        """
+        # Process through transformer blocks
+        for block in self.action_transformer_blocks:
+            x = block(x)
+        
+        # Final normalization
+        x = self.action_norm(x)
+        
+        return x
 
     def forward(
         self,
@@ -137,76 +171,51 @@ class DinoWithExpertModel(nn.Module):
         """Forward pass matching PaliGemmaWithExpertModel interface.
         
         Args:
-            attention_mask: 4D attention mask
-            position_ids: Position IDs for tokens
-            past_key_values: Cached key-value pairs from previous forward pass
+            attention_mask: 4D attention mask (for compatibility, not fully used with DINOv2 blocks)
+            position_ids: Position IDs (for compatibility, not used)
+            past_key_values: Cached key-value pairs (for compatibility, not used with DINOv2 blocks)
             inputs_embeds: List of [prefix_embeds, suffix_embeds] where:
                 - prefix_embeds: Image embeddings (from embed_image) or None
                 - suffix_embeds: Action embeddings or None
-            use_cache: Whether to cache key-value pairs
-            adarms_cond: List of [prefix_adarms_cond, suffix_adarms_cond] or None
+            use_cache: Whether to cache key-value pairs (for compatibility, not used)
+            adarms_cond: List of [prefix_adarms_cond, suffix_adarms_cond] (for compatibility, not used)
             
         Returns:
             Tuple of ([prefix_output, suffix_output], prefix_past_key_values)
-            where prefix_past_key_values is the cached KV pairs for prefix tokens
+            Note: prefix_past_key_values is always None since DINOv2 blocks don't support KV caching
         """
         if adarms_cond is None:
             adarms_cond = [None, None]
 
-        # Case 1: Only prefix (images) - cache key-values for later use
+        # Case 1: Only prefix (images) - process and return
         if inputs_embeds[1] is None:
-            prefix_output = self.gemma_model.model.forward(
-                inputs_embeds=inputs_embeds[0],
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_values=past_key_values,
-                use_cache=use_cache,
-                adarms_cond=adarms_cond[0] if adarms_cond is not None else None,
-            )
-            prefix_past_key_values = prefix_output.past_key_values
-            prefix_output = prefix_output.last_hidden_state
+            prefix_output = self._process_with_transformer(inputs_embeds[0], attention_mask)
             suffix_output = None
+            # DINOv2 blocks don't support KV caching, return None
+            prefix_past_key_values = None
             return [prefix_output, suffix_output], prefix_past_key_values
 
-        # Case 2: Only suffix (actions) - use cached prefix key-values
+        # Case 2: Only suffix (actions) - process and return
         elif inputs_embeds[0] is None:
-            suffix_output = self.gemma_model.model.forward(
-                inputs_embeds=inputs_embeds[1],
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_values=past_key_values,
-                use_cache=use_cache,
-                adarms_cond=adarms_cond[1] if adarms_cond is not None else None,
-            )
-            suffix_output = suffix_output.last_hidden_state
+            suffix_output = self._process_with_transformer(inputs_embeds[1], attention_mask)
             prefix_output = None
             prefix_past_key_values = None
             return [prefix_output, suffix_output], prefix_past_key_values
 
-        # Case 3: Both prefix and suffix - process together
+        # Case 3: Both prefix and suffix - concatenate and process together
         else:
             # Concatenate prefix and suffix embeddings
             all_embeds = torch.cat([inputs_embeds[0], inputs_embeds[1]], dim=1)
             
-            # Forward through Gemma model
-            outputs = self.gemma_model.model.forward(
-                inputs_embeds=all_embeds,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_values=past_key_values,
-                use_cache=use_cache,
-                adarms_cond=adarms_cond[1] if adarms_cond is not None else None,  # Only suffix uses adarms
-            )
-            
-            hidden_states = outputs.last_hidden_state
+            # Process through transformer
+            hidden_states = self._process_with_transformer(all_embeds, attention_mask)
             
             # Split back into prefix and suffix outputs
             prefix_len = inputs_embeds[0].shape[1]
             prefix_output = hidden_states[:, :prefix_len]
             suffix_output = hidden_states[:, prefix_len:]
             
-            # No past_key_values returned when processing both together
+            # No past_key_values returned (DINOv2 blocks don't support caching)
             prefix_past_key_values = None
             
             return [prefix_output, suffix_output], prefix_past_key_values
-
