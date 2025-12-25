@@ -1,12 +1,29 @@
 from functools import partial
 from typing import Literal
+import os
+import sys
 
 import pytest
 import torch
 from torch import nn
 
-from dinov2.dinov2.hub.backbones import dinov2_vits14_reg
-from dinov2.dinov2.layers import NestedTensorBlock, MemEffAttention, Mlp
+# Ensure dinov2 package is importable by adding src/dinov2 to path if needed
+# This allows using 'from dinov2.*' imports which matches DINOv2's internal pattern
+_dinov2_path = None
+if "dinov2" not in sys.modules:
+    # Try to find src/dinov2 relative to this file
+    current_file_dir = os.path.dirname(os.path.abspath(__file__))
+    # This file is at: src/openpi/models_pytorch/dinov2_pytorch.py
+    # So src/dinov2 would be at: src/dinov2
+    src_dir = os.path.join(current_file_dir, "..", "..")
+    dinov2_src_dir = os.path.join(src_dir, "dinov2")
+    if os.path.exists(dinov2_src_dir):
+        _dinov2_path = os.path.abspath(dinov2_src_dir)
+        if _dinov2_path not in sys.path:
+            sys.path.insert(0, _dinov2_path)
+
+from dinov2.hub.backbones import dinov2_vits14_reg
+from dinov2.layers import NestedTensorBlock, MemEffAttention, Mlp
 
 import openpi.models.gemma as _gemma
 
@@ -86,7 +103,7 @@ class DinoWithExpertModel(nn.Module):
         # Keep certain parameters in float32 for numerical stability
         params_to_keep_float32 = [
             "image_proj",
-            "norm",
+            "action_norm",
         ]
 
         for name, param in self.named_parameters():
@@ -108,6 +125,14 @@ class DinoWithExpertModel(nn.Module):
         if image.shape[1] != 3:
             image = image.permute(0, 3, 1, 2)
 
+        # Convert image to match DINOv2 model dtype
+        # Check the dtype of the first DINOv2 parameter to determine model dtype
+        dino_dtype = next(self.dino.parameters()).dtype
+        # Convert to float32 first for stability, then to model dtype if needed
+        image = image.to(dtype=torch.float32)
+        if dino_dtype != torch.float32:
+            image = image.to(dtype=dino_dtype)
+
         # Forward through DINOv2
         features = self.dino.forward_features(image)
         
@@ -119,7 +144,8 @@ class DinoWithExpertModel(nn.Module):
         # Concatenate all tokens: [cls, registers, patches]
         all_tokens = torch.cat([cls_token, reg_tokens, patch_tokens], dim=1)  # [B, 1+num_reg+num_patches, embed_dim]
         
-        # Project to target width
+        # Convert to float32 for image_proj (which is kept in float32)
+        all_tokens = all_tokens.to(dtype=torch.float32)
         image_embeds = self.image_proj(all_tokens)  # [B, num_tokens, vlm_config.width]
         
         return image_embeds
@@ -150,10 +176,20 @@ class DinoWithExpertModel(nn.Module):
         Returns:
             Processed embeddings [B, seq_len, embed_dim]
         """
+        # Convert input to float32 first for stability, then to block dtype if needed
+        x = x.to(dtype=torch.float32)
+        
+        # Check dtype of transformer blocks (they should be bfloat16 if precision is bfloat16)
+        block_dtype = next(self.action_transformer_blocks[0].parameters()).dtype
+        if block_dtype != torch.float32:
+            x = x.to(dtype=block_dtype)
+        
         # Process through transformer blocks
         for block in self.action_transformer_blocks:
             x = block(x)
         
+        # Convert to float32 for action_norm (which is kept in float32)
+        x = x.to(dtype=torch.float32)
         # Final normalization
         x = self.action_norm(x)
         
