@@ -6,7 +6,6 @@ from torch import Tensor
 from torch import nn
 import torch.nn.functional as F  # noqa: N812
 
-import openpi.models.gemma as _gemma
 from openpi.models_pytorch.dinov2_pytorch import DinoWithExpertModel
 import openpi.models_pytorch.preprocessing_pytorch as _preprocessing
 
@@ -68,8 +67,25 @@ class PI1Pytorch(nn.Module):
         self.config = config
         self.pi05 = config.pi05
 
-        # Create a dummy vlm_config for DinoWithExpertModel (matching action_expert_config width)
-        action_expert_config = _gemma.get_config(config.action_expert_variant)
+        # Get action expert config (architecture parameters for DINOv2-style transformer)
+        if hasattr(config, "get_action_expert_config"):
+            # Pi1Config provides get_action_expert_config method
+            action_expert_config = config.get_action_expert_config()
+        else:
+            # Fallback for backward compatibility: create config from individual attributes
+            class ActionExpertConfig:
+                def __init__(self, width, depth, num_heads, mlp_dim):
+                    self.width = width
+                    self.depth = depth
+                    self.num_heads = num_heads
+                    self.mlp_dim = mlp_dim
+            
+            action_expert_config = ActionExpertConfig(
+                width=getattr(config, "action_expert_width", 384),  # Default: dinov2_vits14_reg (ViT-Small)
+                depth=getattr(config, "action_expert_depth", 12),  # Default: dinov2_vits14_reg (ViT-Small)
+                num_heads=getattr(config, "action_expert_num_heads", 6),  # Default: dinov2_vits14_reg (ViT-Small)
+                mlp_dim=getattr(config, "action_expert_mlp_dim", 1536),  # Default: width * 4 = 384 * 4
+            )
         
         # Dummy vlm_config with same width as action_expert for compatibility
         class DummyVLMConfig:

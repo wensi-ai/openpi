@@ -1,8 +1,11 @@
 """
-PyTorch training entrypoint for PI0/PI05 with multi-GPU and multi-node (DDP) support.
+PyTorch training entrypoint for PI0/PI05/PI1 with multi-GPU and multi-node (DDP) support.
 This script mirrors the behavior of the JAX trainer (`scripts/train.py`) but runs
-entirely in PyTorch using the `PI0Pytorch` model and your existing config/data
+entirely in PyTorch using the `PI0Pytorch` or `PI1Pytorch` model and your existing config/data
 pipeline from `src/openpi/training/config.py` and `src/openpi/training/data_loader.py`.
+
+PI1 uses DINOv2 instead of PaliGemma for vision encoding. Set `use_dinov2=True` in the model config
+to use PI1Pytorch, or ensure `paligemma_variant` is not set/None.
 
 Usage
 Single GPU:
@@ -41,7 +44,9 @@ import tqdm
 import wandb
 
 import openpi.models.pi0_config
+import openpi.models.pi1_config
 import openpi.models_pytorch.pi0_pytorch
+import openpi.models_pytorch.pi1_pytorch
 import openpi.shared.normalize as _normalize
 import openpi.training.config as _config
 import openpi.training.data_loader as _data
@@ -390,23 +395,52 @@ def train_loop(config: _config.TrainConfig):
         logging.info("Cleared sample batch and data loader from memory")
 
     # Build model
-    if not isinstance(config.model, openpi.models.pi0_config.Pi0Config):
-        # Convert dataclass to Pi0Config if needed
-        model_cfg = openpi.models.pi0_config.Pi0Config(
-            dtype=config.pytorch_training_precision,
-            action_dim=config.model.action_dim,
-            action_horizon=config.model.action_horizon,
-            max_token_len=config.model.max_token_len,
-            paligemma_variant=getattr(config.model, "paligemma_variant", "gemma_2b"),
-            action_expert_variant=getattr(config.model, "action_expert_variant", "gemma_300m"),
-            pi05=getattr(config.model, "pi05", False),
-        )
+    # Check if we should use PI1 (DINOv2) instead of PI0 (PaliGemma)
+    # Use PI1 if config is Pi1Config, or if explicitly requested via use_dinov2 flag
+    use_pi1 = isinstance(config.model, openpi.models.pi1_config.Pi1Config) or getattr(config.model, "use_dinov2", False)
+    
+    if use_pi1:
+        # Handle PI1Config
+        if not isinstance(config.model, openpi.models.pi1_config.Pi1Config):
+            # Convert dataclass to Pi1Config if needed
+            model_cfg = openpi.models.pi1_config.Pi1Config(
+                dtype=config.pytorch_training_precision,
+                action_dim=config.model.action_dim,
+                action_horizon=config.model.action_horizon,
+                max_token_len=config.model.max_token_len,
+                action_expert_width=getattr(config.model, "action_expert_width", 1024),
+                action_expert_depth=getattr(config.model, "action_expert_depth", 18),
+                action_expert_num_heads=getattr(config.model, "action_expert_num_heads", 8),
+                action_expert_mlp_dim=getattr(config.model, "action_expert_mlp_dim", 4096),
+                pi05=getattr(config.model, "pi05", False),
+            )
+        else:
+            model_cfg = config.model
+            # Update dtype to match pytorch_training_precision
+            object.__setattr__(model_cfg, "dtype", config.pytorch_training_precision)
+        
+        logging.info("Using PI1Pytorch model with DINOv2 (vision encoder)")
+        model = openpi.models_pytorch.pi1_pytorch.PI1Pytorch(model_cfg).to(device)
     else:
-        model_cfg = config.model
-        # Update dtype to match pytorch_training_precision
-        object.__setattr__(model_cfg, "dtype", config.pytorch_training_precision)
-
-    model = openpi.models_pytorch.pi0_pytorch.PI0Pytorch(model_cfg).to(device)
+        # Handle PI0Config
+        if not isinstance(config.model, openpi.models.pi0_config.Pi0Config):
+            # Convert dataclass to Pi0Config if needed
+            model_cfg = openpi.models.pi0_config.Pi0Config(
+                dtype=config.pytorch_training_precision,
+                action_dim=config.model.action_dim,
+                action_horizon=config.model.action_horizon,
+                max_token_len=config.model.max_token_len,
+                paligemma_variant=getattr(config.model, "paligemma_variant", "gemma_2b"),
+                action_expert_variant=getattr(config.model, "action_expert_variant", "gemma_300m"),
+                pi05=getattr(config.model, "pi05", False),
+            )
+        else:
+            model_cfg = config.model
+            # Update dtype to match pytorch_training_precision
+            object.__setattr__(model_cfg, "dtype", config.pytorch_training_precision)
+        
+        logging.info("Using PI0Pytorch model with PaliGemma (vision-language encoder)")
+        model = openpi.models_pytorch.pi0_pytorch.PI0Pytorch(model_cfg).to(device)
 
     if hasattr(model, "gradient_checkpointing_enable"):
         enable_gradient_checkpointing = True
