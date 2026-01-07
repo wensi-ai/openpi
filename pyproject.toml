@@ -13,7 +13,7 @@ dependencies = [
     "flatbuffers>=24.3.25",
     "flax==0.10.2",
     "fsspec[gcs]>=2024.6.0",
-    "gym-aloha>=0.1.1",
+    # "gym-aloha>=0.1.1",
     "imageio>=2.36.1",
     "jax[cuda12]==0.5.3",
     "jaxtyping==0.2.36",
@@ -64,7 +64,7 @@ override-dependencies = ["ml-dtypes==0.4.1", "tensorstore==0.1.74"]
 
 [tool.uv.sources]
 openpi-client = { workspace = true }
-lerobot = { git = "https://github.com/huggingface/lerobot", rev = "0cf864870cf29f4738d3ade893e6fd13fbd7cdb5" }
+lerobot = { git = "https://github.com/huggingface/lerobot", rev = "577cd10974b84bea1f06b6472eb9e5e74e07f77a" }
 dlimp = { git = "https://github.com/kvablack/dlimp", rev = "ad72ce3a9b414db2185bc0b38461d4101a65477a" }
 
 [tool.uv.workspace]

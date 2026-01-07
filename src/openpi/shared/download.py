@@ -14,6 +14,10 @@ import fsspec
 import fsspec.generic
 import tqdm_loggable.auto as tqdm
 
+# Define datetime.UTC for compatibility with older code
+if not hasattr(datetime, "UTC"):
+    datetime.UTC = datetime.timezone.utc
+
 # Environment variable to control cache directory path, ~/.cache/openpi will be used by default.
 _OPENPI_DATA_HOME = "OPENPI_DATA_HOME"
 DEFAULT_CACHE_DIR = "~/.cache/openpi"
