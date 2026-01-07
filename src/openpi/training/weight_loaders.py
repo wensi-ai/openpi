@@ -91,8 +91,11 @@ def _merge_params(loaded_params: at.Params, params: at.Params, *, missing_regex:
     result = {}
     for k, v in flat_loaded.items():
         if k in flat_ref:
-            result[k] = v.astype(flat_ref[k].dtype) if v.dtype != flat_ref[k].dtype else v
-
+            if v.dtype == flat_ref[k].dtype:
+                result[k] = v
+            else:
+                print(f"Warning: {k} has dtype {v.dtype} but reference has dtype {flat_ref[k].dtype}")
+                result[k] = v.astype(flat_ref[k].dtype)
     flat_loaded.clear()
 
     # Then, merge any missing weights as defined by the missing regex.

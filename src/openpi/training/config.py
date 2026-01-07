@@ -5,8 +5,9 @@ from collections.abc import Sequence
 import dataclasses
 import difflib
 import logging
+import os
 import pathlib
-from typing import Any, Literal, Protocol, TypeAlias
+from typing import Any, Literal, List, Protocol, TypeAlias
 
 import etils.epath as epath
 import flax.nnx as nnx
@@ -19,6 +20,7 @@ import openpi.models.pi0_fast as pi0_fast
 import openpi.models.tokenizer as _tokenizer
 import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
+import openpi.policies.b1k_policy as b1k_policy
 import openpi.policies.libero_policy as libero_policy
 import openpi.shared.download as _download
 import openpi.shared.normalize as _normalize
@@ -92,11 +94,17 @@ class DataConfig:
 
     # Only used for RLDS data loader (ie currently only used for DROID).
     rlds_data_dir: str | None = None
+
+    # Only used for B1K data loader.
+    behavior_dataset_root: str | None = None
+
     # Action space for DROID dataset.
     action_space: droid_rlds_dataset.DroidActionSpace | None = None
     # List of datasets to sample from: name, version, weight, and optionally filter_dict_path
     datasets: Sequence[droid_rlds_dataset.RLDSDataset] = ()
 
+    # episodes index to use for training 
+    episodes_index : List[int] | None = None
 
 class GroupFactory(Protocol):
     def __call__(self, model_config: _model.BaseModelConfig) -> _transforms.Group:
@@ -354,6 +362,47 @@ class LeRobotLiberoDataConfig(DataConfigFactory):
             model_transforms=model_transforms,
         )
 
+@dataclasses.dataclass(frozen=True)
+class LeRobotB1KDataConfig(DataConfigFactory):
+
+    action_sequence_keys: Sequence[str] = ("action",)
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        # Make inputs look like they come from the Libero environment
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "observation/egocentric_camera": "observation.images.rgb.head",
+                        "observation/wrist_image_left": "observation.images.rgb.left_wrist",
+                        "observation/wrist_image_right": "observation.images.rgb.right_wrist",
+                        "observation/state": "observation.state",
+                        "actions": "action",
+                        "prompt": "prompt",
+                    }
+                )
+            ]
+        )
+
+        # Prepare data for policy training
+        # Convert images to uint8 numpy arrays, add masks
+        data_transforms = _transforms.Group(
+            inputs=[b1k_policy.B1kInputs(action_dim=model_config.action_dim, model_type=model_config.model_type)],
+            outputs=[b1k_policy.B1kOutputs(action_dim=23)],
+        )
+
+        # Model transforms include things like tokenizing the prompt and action targets
+        model_transforms = ModelTransformFactory()(model_config)
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            action_sequence_keys=self.action_sequence_keys,
+            use_quantile_norm=True,
+        )
 
 @dataclasses.dataclass(frozen=True)
 class RLDSDroidDataConfig(DataConfigFactory):
@@ -533,6 +582,16 @@ class TrainConfig:
     # eg. if total device is 4 and fsdp devices is 2; then the model will shard to 2 devices and run
     # data parallel between 2 groups of devices.
     fsdp_devices: int = 1
+    
+    # How often (in steps) to log validation metrics.
+    val_log_interval: int = 100
+    # Validation batch size (optional, defaults to batch_size if not set)
+    val_batch_size: int | None = None
+    # Number of validation batches to average for validation loss
+    val_num_batches: int = 10
+    # Optionally, repo_id for validation set (if different from train)
+    val_repo_id: str | None = None
+    val_episodes_index: List[int] | None = None
 
     @property
     def assets_dirs(self) -> pathlib.Path:
@@ -640,6 +699,62 @@ _CONFIGS = [
             ),
         ),
     ),
+  
+    # b1k configs
+    TrainConfig(
+        name="pi0_b1k",
+        exp_name="openpi",
+        project_name="B1K",
+        model=pi0_config.Pi0Config(action_horizon=50, paligemma_variant="gemma_2b_lora"),
+        data=LeRobotB1KDataConfig(
+            repo_id="behavior-1k/2025-challenge-demos",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                episodes_index=list(range(190)),
+                behavior_dataset_root="/vision/group/behavior/2025-challenge-demos",
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
+        num_train_steps=50_000,
+        freeze_filter=pi0_config.Pi0Config(
+             action_horizon=50, paligemma_variant="gemma_2b_lora"
+        ).get_freeze_filter(),
+        ema_decay=None,
+        val_log_interval=2500,
+        val_repo_id="behavior-1k/2025-challenge-demos",
+        val_episodes_index=list(range(190, 200)),
+        assets_base_dir="./outputs/assets",
+        checkpoint_base_dir="./outputs/checkpoints",
+        num_workers=min(32, os.cpu_count() - 2),
+    ),
+
+    TrainConfig(
+        name="pi05_b1k",
+        exp_name="openpi",
+        project_name="B1K",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=50, paligemma_variant="gemma_2b_lora"),
+        data=LeRobotB1KDataConfig(
+            repo_id="behavior-1k/2025-challenge-demos",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                episodes_index=list(range(190)),
+                behavior_dataset_root="/vision/group/behavior/2025-challenge-demos",
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True, action_horizon=50, paligemma_variant="gemma_2b_lora"
+        ).get_freeze_filter(),
+        ema_decay=None,
+        val_log_interval=5000,
+        val_repo_id="behavior-1k/2025-challenge-demos",
+        val_episodes_index=list(range(190, 200)),
+        assets_base_dir="./outputs/assets",
+        checkpoint_base_dir="./outputs/checkpoints",
+        num_workers=1,
+    ),
+    
     #
     # Fine-tuning Libero configs.
     #
