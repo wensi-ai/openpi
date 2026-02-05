@@ -5,39 +5,40 @@ import numpy as np
 
 from openpi import transforms
 from openpi.models import model as _model
-from omnigibson.learning.utils.eval_utils import PROPRIOCEPTION_INDICES
+from openpi.configs.robots.base_config import RobotConfig
 
 
 def make_b1k_example() -> dict:
     """Creates a random input example for the Droid policy."""
     return {
-        "observation/egocentric_camera": np.random.randint(256, size=(224, 224, 3), dtype=np.uint8),
-        "observation/wrist_image_left": np.random.randint(256, size=(224, 224, 3), dtype=np.uint8),
-        "observation/wrist_image_right": np.random.randint(256, size=(224, 224, 3), dtype=np.uint8),
-        "observation/joint_position": np.random.rand(23),
+        "observation/image_0": np.random.randint(256, size=(224, 224, 3), dtype=np.uint8),
+        "observation/image_1": np.random.randint(256, size=(224, 224, 3), dtype=np.uint8),
+        "observation/image_2": np.random.randint(256, size=(224, 224, 3), dtype=np.uint8),
+        "observation/state": np.random.rand(23),
         "prompt": "do something",
     }
 
 
-def extract_state_from_proprio(proprio_data):
-    """
+def extract_state_from_proprio(proprio_data, robot_config: RobotConfig) -> np.ndarray:
+    """Extract state from proprioception data based on robot configuration.
+    
     We assume perfect correlation for the two gripper fingers.
+    
+    Args:
+        proprio_data: Raw proprioception data
+        robot_config: RobotConfig instance containing robot configuration
+        
+    Returns:
+        Extracted state array
     """
-    # extract joint position
-    base_qvel = proprio_data[..., PROPRIOCEPTION_INDICES["R1Pro"]["base_qvel"]]  # 3
-    trunk_qpos = proprio_data[..., PROPRIOCEPTION_INDICES["R1Pro"]["trunk_qpos"]]  # 4
-    arm_left_qpos = proprio_data[..., PROPRIOCEPTION_INDICES["R1Pro"]["arm_left_qpos"]]  #  7
-    arm_right_qpos = proprio_data[..., PROPRIOCEPTION_INDICES["R1Pro"]["arm_right_qpos"]]  #  7
-    left_gripper_width = proprio_data[..., PROPRIOCEPTION_INDICES["R1Pro"]["gripper_left_qpos"]].sum(axis=-1, keepdims=True)  # 1
-    right_gripper_width = proprio_data[..., PROPRIOCEPTION_INDICES["R1Pro"]["gripper_right_qpos"]].sum(axis=-1, keepdims=True)  # 1
-    return np.concatenate([
-        base_qvel,
-        trunk_qpos,
-        arm_left_qpos,
-        arm_right_qpos,
-        left_gripper_width,
-        right_gripper_width,
-    ], axis=-1)
+    state = []
+    for proprio in robot_config.proprio:
+        if proprio.is_eef:
+            # Sum the gripper finger positions to get a single width value
+            state.append(proprio_data[..., proprio.indices].sum(axis=-1, keepdims=True))
+        else:
+            state.append(proprio_data[..., proprio.indices])
+    return np.concatenate(state, axis=-1)
 
 
 def _parse_image(image) -> np.ndarray:
@@ -50,36 +51,39 @@ def _parse_image(image) -> np.ndarray:
 
 
 @dataclasses.dataclass(frozen=True)
-class B1kInputs(transforms.DataTransformFn):
-    # The action dimension of the model. Will be used to pad state and actions.
-    action_dim: int
-
+class B1KInputs(transforms.DataTransformFn):
     # Determines which model will be used.
     model_type: _model.ModelType = _model.ModelType.PI0
+    
+    # Robot configuration object
+    robot_config: RobotConfig = dataclasses.field(default=None)
 
     def __call__(self, data: dict) -> dict:
 
         proprio_data = data["observation/state"]
         # extract joint position
-        state = extract_state_from_proprio(proprio_data)
+        state = extract_state_from_proprio(proprio_data, self.robot_config)
         if "actions" in data:
             action =  data["actions"]
 
         # Possibly need to parse images to uint8 (H,W,C) since LeRobot automatically
         # stores as float32 (C,H,W), gets skipped for policy inference
-        base_image = _parse_image(data["observation/egocentric_camera"])
-        wrist_image_left = _parse_image(data["observation/wrist_image_left"])
-        wrist_image_right = _parse_image(data["observation/wrist_image_right"])
-
+        images, image_masks = [], []
+        for camera_id in self.robot_config.observations:
+            images.append(_parse_image(data[f"observation/{camera_id}"]))
+            image_masks.append(np.True_)
+        while len(images) < 3:
+            images.append(np.zeros_like(images[0]))
+            image_masks.append(np.False_)
         match self.model_type:
             case _model.ModelType.PI0 | _model.ModelType.PI05:
                 names = ("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb")
-                images = (base_image, wrist_image_left, wrist_image_right)
-                image_masks = (np.True_, np.True_, np.True_)
+                images = tuple(images)
+                image_masks = tuple(image_masks)
             case _model.ModelType.PI0_FAST:
                 names = ("base_0_rgb", "base_1_rgb", "wrist_0_rgb")
                 # We don't mask out padding images for FAST models.
-                images = (base_image, wrist_image_left, wrist_image_right)
+                images = tuple(images)
                 image_masks = (np.True_, np.True_, np.True_)
             case _:
                 raise ValueError(f"Unsupported model type: {self.model_type}")
@@ -100,8 +104,10 @@ class B1kInputs(transforms.DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
-class B1kOutputs(transforms.DataTransformFn):
-    action_dim: int = 23
+class B1KOutputs(transforms.DataTransformFn):
+    # The action dimension of the model. Will be used to pad state and actions.
+    action_dim: int
+
     def __call__(self, data: dict) -> dict:
         # Only return the first 23 dims.
         return {"actions": np.asarray(data["actions"][:, :self.action_dim])}

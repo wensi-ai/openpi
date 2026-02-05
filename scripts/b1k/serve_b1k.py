@@ -1,26 +1,14 @@
 import dataclasses
-import enum
 import logging
 import socket
-
 import tyro
 
-from omnigibson.learning.utils.network_utils import WebsocketPolicyServer
-from omnigibson.learning.datas import BehaviorLerobotDatasetMetadata
-
+from openpi.configs.tasks import TASK_REGISTRY
 from openpi.policies import policy as _policy
 from openpi.policies import policy_config as _policy_config
+from openpi.serving import websocket_b1k_server
 from openpi.shared.eval_b1k_wrapper import B1KPolicyWrapper
 from openpi.training import config as _config
-
-
-class EnvMode(enum.Enum):
-    """Supported environments."""
-
-    ALOHA = "aloha"
-    ALOHA_SIM = "aloha_sim"
-    DROID = "droid"
-    LIBERO = "libero"
 
 
 @dataclasses.dataclass
@@ -42,17 +30,8 @@ class Default:
 class Args:
     """Arguments for the serve_policy script."""
 
-    # Environment to serve the policy for. This is only used when serving default policies.
-    env: EnvMode = EnvMode.ALOHA_SIM
-
-    # If provided, will be used in case the "prompt" key is not present in the data, or if the model doesn't have a default
-    # prompt.
-    default_prompt: str | None = None
-
-    # Dataset root, used to retrieve the prompt of the task if taskname is not None.
-    dataset_root: str | None = "/scr/behavior/2025-challenge-demos"
-    # If provided, will be used to retrieve the prompt of the task, otherwise use turning_on_radio as default.
-    task_name: str | None = None
+    robot: str
+    task: str
 
     # Port to serve the policy on.
     port: int = 8000
@@ -63,39 +42,35 @@ class Args:
     policy: Checkpoint | Default = dataclasses.field(default_factory=Default)
 
 
-def create_policy(args: Args) -> _policy.Policy:
-    """Create a policy from the given arguments."""
-    return _policy_config.create_trained_policy(
-        _config.get_config(args.policy.config), args.policy.dir, default_prompt=args.default_prompt
-    )
-
-
 def main(args: Args) -> None:
-    metadata = BehaviorLerobotDatasetMetadata(
-        repo_id="behavior-1k/2025-challenge-demos",
-        root=args.dataset_root,
-        tasks=[args.task_name] if args.task_name else "turning_on_radio",
-        modalities=[],
-        cameras=[],
-    )
-    prompt = list(metadata.tasks.values())[0]
+    # Load task from registry
+    task_bucket, task_name = args.task.split("/")
+    task_prompt = TASK_REGISTRY[task_bucket][task_name]
     # log the prompt used
-    logging.info(f"Using prompt: {prompt}")
+    logging.info(f"Using robot: {args.robot}, prompt: {task_prompt}")
+    
+    # Load training config and override robot_type
+    config = _config.get_config(args.policy.config)
+    config = dataclasses.replace(
+        config, data=dataclasses.replace(config.data, robot_config_name=args.robot)
+    )
 
-    policy = create_policy(args)
+    policy = _policy_config.create_trained_policy(
+        config, args.policy.dir, default_prompt=task_prompt
+    )
     policy_metadata = policy.metadata
 
     # Record the policy's behavior.
     if args.record:
         policy = _policy.PolicyRecorder(policy, "policy_records")
 
-    policy = B1KPolicyWrapper(policy, text_prompt=prompt)
+    policy = B1KPolicyWrapper(policy, robot=args.robot, text_prompt=task_prompt)
 
     hostname = socket.gethostname()
     local_ip = socket.gethostbyname(hostname)
     logging.info("Creating server (host: %s, ip: %s)", hostname, local_ip)
 
-    server = WebsocketPolicyServer(
+    server = websocket_b1k_server.WebsocketPolicyServer(
         policy=policy,
         host="0.0.0.0",
         port=args.port,
