@@ -5,9 +5,9 @@ from collections.abc import Sequence
 import dataclasses
 import difflib
 import logging
-import os
 import pathlib
 from typing import Any, Literal, List, Protocol, TypeAlias
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 import etils.epath as epath
 import flax.nnx as nnx
@@ -30,6 +30,7 @@ import openpi.training.misc.roboarena_config as roboarena_config
 import openpi.training.optimizer as _optimizer
 import openpi.training.weight_loaders as weight_loaders
 import openpi.transforms as _transforms
+from openpi.configs import ROBOT_REGISTRY
 
 ModelType: TypeAlias = _model.ModelType
 # Work around a tyro issue with using nnx.filterlib.Filter directly.
@@ -94,15 +95,16 @@ class DataConfig:
 
     # Only used for RLDS data loader (ie currently only used for DROID).
     rlds_data_dir: str | None = None
-
-    # Only used for B1K data loader.
-    behavior_dataset_root: str | None = None
-
     # Action space for DROID dataset.
     action_space: droid_rlds_dataset.DroidActionSpace | None = None
     # List of datasets to sample from: name, version, weight, and optionally filter_dict_path
     datasets: Sequence[droid_rlds_dataset.RLDSDataset] = ()
 
+    # ============== Behavior Dataset Params ==================
+    # Dataset class to use for loading the behavior dataset
+    data_cls: Any = LeRobotDataset
+    # path to local copy of the dataset
+    dataset_root: str | None = None
     # episodes index to use for training 
     episodes_index : List[int] | None = None
 
@@ -364,37 +366,63 @@ class LeRobotLiberoDataConfig(DataConfigFactory):
 
 @dataclasses.dataclass(frozen=True)
 class LeRobotB1KDataConfig(DataConfigFactory):
-
+    robot_config_name: str = tyro.MISSING
+    extra_delta_transform: bool = True
     action_sequence_keys: Sequence[str] = ("action",)
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
-        # Make inputs look like they come from the Libero environment
+        robot_config = ROBOT_REGISTRY[self.robot_config_name]
+
+        # Build repack mapping dynamically based on available observations
+        repack_mapping = {}
+        for i in range(3):  # Support up to 3 cameras (image_0, image_1, image_2)
+            image_key = f"image_{i}"
+            if image_key in robot_config.observations:
+                repack_mapping[f"observation/{image_key}"] = robot_config.observations[image_key].dataset_key
+        
+        # Add non-image observations
+        repack_mapping.update({
+            "observation/state": "observation.state",
+            "actions": "action",
+            "prompt": "prompt",
+        })
+
         repack_transform = _transforms.Group(
             inputs=[
-                _transforms.RepackTransform(
-                    {
-                        "observation/egocentric_camera": "observation.images.rgb.head",
-                        "observation/wrist_image_left": "observation.images.rgb.left_wrist",
-                        "observation/wrist_image_right": "observation.images.rgb.right_wrist",
-                        "observation/state": "observation.state",
-                        "actions": "action",
-                        "prompt": "prompt",
-                    }
-                )
+                _transforms.RepackTransform(repack_mapping)
             ]
         )
 
         # Prepare data for policy training
         # Convert images to uint8 numpy arrays, add masks
         data_transforms = _transforms.Group(
-            inputs=[b1k_policy.B1kInputs(action_dim=model_config.action_dim, model_type=model_config.model_type)],
-            outputs=[b1k_policy.B1kOutputs(action_dim=23)],
+            inputs=[b1k_policy.B1KInputs(robot_config=robot_config, model_type=model_config.model_type)],
+            outputs=[b1k_policy.B1KOutputs(action_dim=robot_config.action_dim)],
         )
 
+        # extra delta transform.
+        if self.extra_delta_transform:
+            # Build delta action mask based on robot_config.action
+            # For each action component, apply delta if needs_delta_comp is True
+            delta_indices = []
+            for action_config in robot_config.action:
+                if action_config.needs_delta_comp:
+                    delta_indices.extend(action_config.indices)
+            
+            # Create mask: True for delta actions, False for absolute actions
+            delta_action_mask = [i in delta_indices for i in range(robot_config.action_dim)]
+            
+            data_transforms = data_transforms.push(
+                inputs=[_transforms.DeltaActions(delta_action_mask)],
+                outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+            )
+
         # Model transforms include things like tokenizing the prompt and action targets
+        # You do not need to change anything here for your own dataset.
         model_transforms = ModelTransformFactory()(model_config)
 
+        # We return all data transforms for training and inference. No need to change anything here.
         return dataclasses.replace(
             self.create_base_config(assets_dirs, model_config),
             repack_transforms=repack_transform,
@@ -403,6 +431,7 @@ class LeRobotB1KDataConfig(DataConfigFactory):
             action_sequence_keys=self.action_sequence_keys,
             use_quantile_norm=True,
         )
+   
 
 @dataclasses.dataclass(frozen=True)
 class RLDSDroidDataConfig(DataConfigFactory):
@@ -516,7 +545,7 @@ class TrainConfig:
     # Name of the config. Must be unique. Will be used to reference this config.
     name: tyro.conf.Suppress[str]
     # Project name.
-    project_name: str = "openpi"
+    project_name: str = "B1K"
     # Experiment name. Will be used to name the metadata and checkpoint directories.
     exp_name: str = tyro.MISSING
 
@@ -583,8 +612,9 @@ class TrainConfig:
     # data parallel between 2 groups of devices.
     fsdp_devices: int = 1
     
+    # ============== B1K Specific Params ==================
     # How often (in steps) to log validation metrics.
-    val_log_interval: int = 100
+    val_log_interval: int = 2500
     # Validation batch size (optional, defaults to batch_size if not set)
     val_batch_size: int | None = None
     # Number of validation batches to average for validation loss
@@ -700,59 +730,44 @@ _CONFIGS = [
         ),
     ),
   
-    # b1k configs
+    #  ================= behavior configs =================
     TrainConfig(
         name="pi0_b1k",
-        exp_name="openpi",
-        project_name="B1K",
-        model=pi0_config.Pi0Config(action_horizon=50, paligemma_variant="gemma_2b_lora"),
+        model=pi0_config.Pi0Config(action_horizon=50),
         data=LeRobotB1KDataConfig(
-            repo_id="behavior-1k/2025-challenge-demos",
+            repo_id="i3l/books",
             base_config=DataConfig(
                 prompt_from_task=True,
-                episodes_index=list(range(190)),
-                behavior_dataset_root="/vision/group/behavior/2025-challenge-demos",
+                episodes_index=list(range(100)),
+                dataset_root="/vision/u/wsai/data/lerobot/i3l/books",
             ),
+            robot_config_name="i3l/RealR1Pro",
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
         num_train_steps=50_000,
-        freeze_filter=pi0_config.Pi0Config(
-             action_horizon=50, paligemma_variant="gemma_2b_lora"
-        ).get_freeze_filter(),
-        ema_decay=None,
-        val_log_interval=2500,
-        val_repo_id="behavior-1k/2025-challenge-demos",
-        val_episodes_index=list(range(190, 200)),
+        # val_repo_id="iiil/pnp",
+        # val_episodes_index=list(range(100, 150)),
         assets_base_dir="./outputs/assets",
         checkpoint_base_dir="./outputs/checkpoints",
-        num_workers=min(32, os.cpu_count() - 2),
     ),
-
     TrainConfig(
         name="pi05_b1k",
-        exp_name="openpi",
-        project_name="B1K",
-        model=pi0_config.Pi0Config(pi05=True, action_horizon=50, paligemma_variant="gemma_2b_lora"),
+        model=pi0_config.Pi0Config(action_horizon=50, pi05=True),
         data=LeRobotB1KDataConfig(
-            repo_id="behavior-1k/2025-challenge-demos",
+            repo_id="i3l/books",
             base_config=DataConfig(
                 prompt_from_task=True,
-                episodes_index=list(range(190)),
-                behavior_dataset_root="/vision/group/behavior/2025-challenge-demos",
+                episodes_index=list(range(100)),
+                dataset_root="/vision/u/wsai/data/lerobot/i3l/books",
             ),
+            robot_config_name="i3l/RealR1Pro",
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         num_train_steps=50_000,
-        freeze_filter=pi0_config.Pi0Config(
-            pi05=True, action_horizon=50, paligemma_variant="gemma_2b_lora"
-        ).get_freeze_filter(),
-        ema_decay=None,
-        val_log_interval=5000,
-        val_repo_id="behavior-1k/2025-challenge-demos",
-        val_episodes_index=list(range(190, 200)),
+        # val_repo_id="iiil/pnp",
+        # val_episodes_index=list(range(100, 150)),
         assets_base_dir="./outputs/assets",
         checkpoint_base_dir="./outputs/checkpoints",
-        num_workers=1,
     ),
     
     #

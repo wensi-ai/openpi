@@ -109,7 +109,7 @@ def _create_validation_data_loader(
             for batch in self._torch_data_loader:
                 yield _model.Observation.from_dict(batch), batch["actions"]
 
-    val_dataset = _data_loader.create_behavior_dataset(actual_val_data_config, val_config.model.action_horizon)
+    val_dataset = _data_loader.create_b1k_dataset(actual_val_data_config, val_config.model.action_horizon)
     logging.info(f"Validation dataset created for {actual_val_data_config.repo_id}")
     val_dataset = _data_loader.transform_dataset(
         val_dataset, actual_val_data_config, skip_norm_stats=not use_norm_stats
@@ -418,7 +418,7 @@ def main(config: _config.TrainConfig):
     )
     init_wandb(config, resuming=resuming, enabled=config.wandb_enabled)
 
-    data_loader = _data_loader.create_behavior_data_loader(
+    data_loader = _data_loader.create_b1k_data_loader(
         config,
         sharding=data_sharding,
         shuffle=True,

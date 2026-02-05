@@ -127,22 +127,16 @@ class FakeDataset(Dataset):
         return self._num_samples
 
 
-def create_behavior_dataset(data_config: _config.DataConfig, action_horizon: int) -> Dataset:
-    """Create a dataset for training."""
-    from omnigibson.learning.datas.lerobot_dataset import BehaviorLeRobotDataset
-    
-    dataset = BehaviorLeRobotDataset(
+def create_b1k_dataset(data_config: _config.DataConfig, action_horizon: int) -> Dataset:
+    """Create a behavior dataset for training."""
+    dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id=data_config.repo_id, root=data_config.dataset_root)
+    dataset = data_config.data_cls(
         repo_id=data_config.repo_id,
-        root=data_config.behavior_dataset_root,
-        tasks=["turning_on_radio"],
-        modalities=["rgb"],
-        local_only=True,
+        root=data_config.dataset_root,
         delta_timestamps={
-            key: [t / 30.0 for t in range(action_horizon)] for key in data_config.action_sequence_keys
+            key: [t / dataset_meta.fps for t in range(action_horizon)] for key in data_config.action_sequence_keys
         },
         episodes=data_config.episodes_index,
-        chunk_streaming_using_keyframe=True,
-        shuffle=True,
     )
 
     if data_config.prompt_from_task:
@@ -293,7 +287,7 @@ def create_data_loader(
     )
 
 
-def create_behavior_data_loader(
+def create_b1k_data_loader(
     config: _config.TrainConfig,
     *,
     sharding: jax.sharding.Sharding | None = None,
@@ -302,7 +296,7 @@ def create_behavior_data_loader(
     skip_norm_stats: bool = False,
 ) -> DataLoader[tuple[_model.Observation, _model.Actions]]:
     data_config = config.data.create(config.assets_dirs, config.model)
-    dataset = create_behavior_dataset(data_config, action_horizon=config.model.action_horizon)
+    dataset = create_b1k_dataset(data_config=data_config, action_horizon=config.model.action_horizon)
     dataset = transform_dataset(dataset, data_config, skip_norm_stats=skip_norm_stats)
 
     data_loader = TorchDataLoader(
