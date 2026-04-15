@@ -424,6 +424,46 @@ class RLDSDroidDataConfig(DataConfigFactory):
 
 
 @dataclasses.dataclass(frozen=True)
+class LeRobotMolmospacesDroidDataConfig(DataConfigFactory):
+    """Like LeRobotDROIDDataConfig but built for molmospaces drawer sim data.
+
+    The molmospaces datagen pipeline only records one exocentric camera, so
+    we drop exterior_image_2_left from the repack (DroidInputs zero-fills the
+    third image slot anyway). Skipping that field saves ~33% of the image
+    writes and per-episode mp4 encoding cost during conversion.
+    """
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "observation/exterior_image_1_left": "exterior_image_1_left",
+                        "observation/wrist_image_left": "wrist_image_left",
+                        "observation/joint_position": "joint_position",
+                        "observation/gripper_position": "gripper_position",
+                        "actions": "actions",
+                        "prompt": "prompt",
+                    }
+                )
+            ]
+        )
+        data_transforms = _transforms.Group(
+            inputs=[droid_policy.DroidInputs(model_type=model_config.model_type)],
+            outputs=[droid_policy.DroidOutputs()],
+        )
+        model_transforms = ModelTransformFactory()(model_config)
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
 class LeRobotDROIDDataConfig(DataConfigFactory):
     """
     Example data config for custom DROID dataset in LeRobot format.
@@ -915,6 +955,42 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
         num_train_steps=20_000,
         batch_size=32,
+    ),
+    TrainConfig(
+        # Fine-tune pi05-droid on the molmospaces drawer-open simulation
+        # dataset produced by scripts/datagen/data_gen.sh. The LeRobot dataset
+        # is built by examples/molmospaces/convert_molmodata_to_lerobot.py.
+        #
+        # We compute fresh normalization stats (no assets override) because
+        # the sim observation/action distributions differ from real DROID
+        # (joint velocities from sim qpos diffs, gripper obs scaled by
+        # 0.824033 to match pi_policy.py, etc.).
+        name="pi05_droid_renderscale",
+        project_name="renderscale-pi05",
+        # LoRA fine-tune so training fits on 2xL40S (48GB each). Full pi05
+        # fine-tuning OOMs at batch_size=4 on this hardware. Same pattern as
+        # pi0_libero_low_mem_finetune.
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id="renderscale/drawer_open",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=20_000,
+        batch_size=16,
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
     ),
     #
     # ALOHA Sim configs. This config is used to demonstrate how to train on a simple simulated environment.
