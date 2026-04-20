@@ -49,6 +49,7 @@ class RobotConfig:
     name: str
     robot_type: str
     observations: Dict[str, ObservationConfig]
+    action_key: str
     action_dim: int
     action: List[StateActionConfig]
     proprio: List[StateActionConfig]

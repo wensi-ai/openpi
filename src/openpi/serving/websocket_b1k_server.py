@@ -6,6 +6,7 @@ import msgpack
 import numpy as np
 import time
 import traceback
+import torch
 import websockets.asyncio.server as _server
 import websockets
 from copy import deepcopy
@@ -114,7 +115,7 @@ def _health_check(connection, request) -> Optional[Any]:
 
 
 """
-Adds NumPy array support to msgpack.
+Adds NumPy array and PyTorch tensor support to msgpack.
 
 msgpack is good for (de)serializing data over a network for multiple reasons:
 - msgpack is secure (as opposed to pickle/dill/etc which allow for arbitrary code execution)
@@ -124,16 +125,27 @@ msgpack is good for (de)serializing data over a network for multiple reasons:
 - msgpack is fast and efficient (as opposed to readable formats like JSON/YAML/etc); I found that msgpack was ~4x faster
     than pickle for serializing large arrays using the below strategy
 
+This module supports serializing both NumPy arrays and PyTorch tensors. PyTorch tensors are converted to
+NumPy arrays (zero-copy when possible) before serialization. On deserialization, arrays are returned as NumPy arrays.
+
 The code below is adapted from https://github.com/lebedov/msgpack-numpy. The reason not to use that library directly is
 that it falls back to pickle for object arrays.
 """
 
 
-def pack_array(obj):
-    if (isinstance(obj, (np.ndarray, np.generic))) and obj.dtype.kind in ("V", "O", "c"):
-        raise ValueError(f"Unsupported dtype: {obj.dtype}")
+def pack_data(obj):
+    if isinstance(obj, torch.Tensor):
+        data = obj.detach().cpu().numpy()
+        return {
+            b"__ndarray__": True,
+            b"data": data.tobytes(),
+            b"dtype": data.dtype.str,
+            b"shape": data.shape,
+        }
 
     if isinstance(obj, np.ndarray):
+        if obj.dtype.kind in ("V", "O", "c"):
+            raise ValueError(f"Unsupported dtype: {obj.dtype}")
         return {
             b"__ndarray__": True,
             b"data": obj.tobytes(),
@@ -151,7 +163,7 @@ def pack_array(obj):
     return obj
 
 
-def unpack_array(obj):
+def unpack_data(obj):
     if b"__ndarray__" in obj:
         return np.ndarray(buffer=obj[b"data"], dtype=np.dtype(obj[b"dtype"]), shape=obj[b"shape"])
 
@@ -161,8 +173,8 @@ def unpack_array(obj):
     return obj
 
 
-Packer = functools.partial(msgpack.Packer, default=pack_array)
-packb = functools.partial(msgpack.packb, default=pack_array)
+Packer = functools.partial(msgpack.Packer, default=pack_data)
+packb = functools.partial(msgpack.packb, default=pack_data)
 
-Unpacker = functools.partial(msgpack.Unpacker, object_hook=unpack_array)
-unpackb = functools.partial(msgpack.unpackb, object_hook=unpack_array)
+Unpacker = functools.partial(msgpack.Unpacker, object_hook=unpack_data)
+unpackb = functools.partial(msgpack.unpackb, object_hook=unpack_data)

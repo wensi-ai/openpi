@@ -7,7 +7,7 @@ import difflib
 import logging
 import pathlib
 from typing import Any, Literal, List, Protocol, TypeAlias
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.datasets.lerobot_dataset import LeRobotDataset, MultiLeRobotDataset
 
 import etils.epath as epath
 import flax.nnx as nnx
@@ -31,6 +31,7 @@ import openpi.training.optimizer as _optimizer
 import openpi.training.weight_loaders as weight_loaders
 import openpi.transforms as _transforms
 from openpi.configs import ROBOT_REGISTRY
+from openpi.training.i3l import I3LLeRobotDataset
 
 ModelType: TypeAlias = _model.ModelType
 # Work around a tyro issue with using nnx.filterlib.Filter directly.
@@ -66,8 +67,8 @@ class AssetsConfig:
 
 @dataclasses.dataclass(frozen=True)
 class DataConfig:
-    # LeRobot repo id. If None, fake data will be created.
-    repo_id: str | None = None
+    # LeRobot repo id. If None, fake data will be created. Should be list of str if using MultiLeRobotDataset.
+    repo_id: str | List[str] | None = None
     # Directory within the assets directory containing the data assets.
     asset_id: str | None = None
     # Contains precomputed normalization stats. If None, normalization will not be performed.
@@ -98,15 +99,16 @@ class DataConfig:
     # Action space for DROID dataset.
     action_space: droid_rlds_dataset.DroidActionSpace | None = None
     # List of datasets to sample from: name, version, weight, and optionally filter_dict_path
-    datasets: Sequence[droid_rlds_dataset.RLDSDataset] = ()
+    datasets: Sequence[droid_rlds_dataset.RLDSDataset | LeRobotDataset] = ()
 
     # ============== Behavior Dataset Params ==================
-    # Dataset class to use for loading the behavior dataset
+    # Dataset class to use for loading the behavior-style lerobot dataset
     data_cls: Any = LeRobotDataset
-    # path to local copy of the dataset
+    # Path to local copy of the dataset
+    # Note that this includes repo_id if LeRobotDataset and not include repo_id if MultiLeRobotDataset
     dataset_root: str | None = None
-    # episodes index to use for training 
-    episodes_index : List[int] | None = None
+    # Extra kwargs to pass into the dataset constructor, if using a custom dataset class that requires additional arguments.
+    dataset_kwargs: dict[str, Any] = dataclasses.field(default_factory=dict)
 
 class GroupFactory(Protocol):
     def __call__(self, model_config: _model.BaseModelConfig) -> _transforms.Group:
@@ -176,7 +178,7 @@ class ModelTransformFactory(GroupFactory):
 @dataclasses.dataclass(frozen=True)
 class DataConfigFactory(abc.ABC):
     # The LeRobot repo id.
-    repo_id: str = tyro.MISSING
+    repo_id: str | List[str] = tyro.MISSING
     # Determines how the assets will be loaded.
     assets: AssetsConfig = dataclasses.field(default_factory=AssetsConfig)
     # Base config that will be updated by the factory.
@@ -197,9 +199,12 @@ class DataConfigFactory(abc.ABC):
             use_quantile_norm=model_config.model_type != ModelType.PI0,
         )
 
-    def _load_norm_stats(self, assets_dir: epath.Path, asset_id: str | None) -> dict[str, _transforms.NormStats] | None:
+    def _load_norm_stats(self, assets_dir: epath.Path, asset_id: str | List[str] | None) -> dict[str, _transforms.NormStats] | None:
         if asset_id is None:
             return None
+        if isinstance(asset_id, list):
+            # Only load the first asset_id assuming that the datasets are similar
+            asset_id = asset_id[0]
         try:
             data_assets_dir = str(assets_dir / asset_id)
             norm_stats = _normalize.load(_download.maybe_download(data_assets_dir))
@@ -384,7 +389,7 @@ class LeRobotB1KDataConfig(DataConfigFactory):
         # Add non-image observations
         repack_mapping.update({
             "observation/state": "observation.state",
-            "actions": "action",
+            "actions": robot_config.action_key,
             "prompt": "prompt",
         })
 
@@ -428,8 +433,8 @@ class LeRobotB1KDataConfig(DataConfigFactory):
             repack_transforms=repack_transform,
             data_transforms=data_transforms,
             model_transforms=model_transforms,
-            action_sequence_keys=self.action_sequence_keys,
-            use_quantile_norm=True,
+            action_sequence_keys=(robot_config.action_key,),
+            use_quantile_norm=False,
         )
    
 
@@ -584,7 +589,7 @@ class TrainConfig:
     batch_size: int = 32
     # Number of workers to use for the data loader. Increasing this number will speed up data loading but
     # will increase memory and CPU usage.
-    num_workers: int = 2
+    num_workers: int = 8
     # Number of train steps (batches) to run.
     num_train_steps: int = 30_000
 
@@ -613,8 +618,8 @@ class TrainConfig:
     fsdp_devices: int = 1
     
     # ============== B1K Specific Params ==================
-    # How often (in steps) to log validation metrics.
-    val_log_interval: int = 2500
+    # How often (in steps) to log validation metrics. If None, no validation will be performed. 
+    val_log_interval: int | None = None
     # Validation batch size (optional, defaults to batch_size if not set)
     val_batch_size: int | None = None
     # Number of validation batches to average for validation loss
@@ -732,40 +737,136 @@ _CONFIGS = [
   
     #  ================= behavior configs =================
     TrainConfig(
-        name="pi0_b1k",
-        model=pi0_config.Pi0Config(action_horizon=50),
+        name="pi05_single",
+        model=pi0_config.Pi0Config(action_horizon=30, pi05=True),
         data=LeRobotB1KDataConfig(
-            repo_id="i3l/books",
+            repo_id="i3l/bread",
             base_config=DataConfig(
+                data_cls=LeRobotDataset,
+                dataset_root="/lambda/nfs/jiajun-stanford-lab/Research/data/lerobot/i3l/bread",
                 prompt_from_task=True,
-                episodes_index=list(range(100)),
-                dataset_root="/vision/u/wsai/data/lerobot/i3l/books",
+                dataset_kwargs={
+                    "episodes": list(range(100)),
+                },                
             ),
             robot_config_name="i3l/RealR1Pro",
         ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        assets_base_dir="./outputs/assets",
+        checkpoint_base_dir="./outputs/checkpoints",
+    ),
+
+    TrainConfig(
+        name="pi05_i3l_sim",
+        model=pi0_config.Pi0Config(action_horizon=30, pi05=True),
+        data=LeRobotB1KDataConfig(
+            repo_id=["i3l/open-demo-0-100", "i3l/open-int-1-20"],
+            base_config=DataConfig(
+                data_cls=I3LLeRobotDataset,
+                dataset_root="/lambda/nfs/jiajun-stanford-lab/Research/data/lerobot",
+                prompt_from_task=True,
+                dataset_kwargs={
+                    "episodes": {
+                        "i3l/open-demo-0-100": list(range(40)),
+                        "i3l/open-int-1-20": list(range(20)),
+                    },
+                    "sampling_mode": True,
+                    "reweight_strategy": "sirius",
+                },   
+            ),
+            robot_config_name="i3l/SimR1Pro",
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         num_train_steps=50_000,
         # val_repo_id="iiil/pnp",
         # val_episodes_index=list(range(100, 150)),
         assets_base_dir="./outputs/assets",
         checkpoint_base_dir="./outputs/checkpoints",
     ),
-    TrainConfig(
-        name="pi05_b1k",
-        model=pi0_config.Pi0Config(action_horizon=50, pi05=True),
+
+     TrainConfig(
+        name="pi05_i3l_real",
+        model=pi0_config.Pi0Config(action_horizon=30, pi05=True),
         data=LeRobotB1KDataConfig(
-            repo_id="i3l/books",
+            repo_id=["i3l/books-demo-0-100", "i3l/books-int-1-25"],
             base_config=DataConfig(
+                data_cls=I3LLeRobotDataset,
+                dataset_root="/lambda/nfs/jiajun-stanford-lab/Research/data/lerobot",
                 prompt_from_task=True,
-                episodes_index=list(range(100)),
-                dataset_root="/vision/u/wsai/data/lerobot/i3l/books",
+                dataset_kwargs={
+                    "episodes": {
+                        "i3l/books-demo-0-100": list(range(100)),
+                        "i3l/books-int-1-25": list(range(25)),
+                    },
+                    "sampling_mode": True,
+                    "reweight_strategy": "i3l",
+                },                
             ),
             robot_config_name="i3l/RealR1Pro",
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         num_train_steps=50_000,
-        # val_repo_id="iiil/pnp",
-        # val_episodes_index=list(range(100, 150)),
+        assets_base_dir="./outputs/assets",
+        checkpoint_base_dir="./outputs/checkpoints",
+    ),
+
+    TrainConfig(
+        name="pi05_s2rg_sim",
+        model=pi0_config.Pi0Config(
+            action_horizon=30,
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotB1KDataConfig(
+            repo_id=["s2rg/DroidMugTask", "s2rg/DroidBowlTask", "s2rg/DroidEggTask", "s2rg/DroidAppleTask"],
+            base_config=DataConfig(
+                data_cls=MultiLeRobotDataset,
+                prompt_from_task=True,
+                dataset_root="/vision/u/wsai/data/lerobot",
+            ),
+            robot_config_name="s2rg/sim_franka",
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            action_horizon=30,
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+        num_train_steps=50_000,
+        assets_base_dir="./outputs/assets",
+        checkpoint_base_dir="./outputs/checkpoints",
+    ),
+
+    TrainConfig(
+        name="pi05_s2rg_real",
+        model=pi0_config.Pi0Config(
+            action_horizon=30,
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotB1KDataConfig(
+            repo_id=["s2rg/DroidMugTask", "s2rg/DroidBowlTask", "s2rg/DroidEggTask", "s2rg/DroidAppleTask"],
+            base_config=DataConfig(
+                data_cls=MultiLeRobotDataset,
+                prompt_from_task=True,
+                dataset_root="/vision/u/wsai/data/lerobot",
+            ),
+            robot_config_name="s2rg/real_franka",
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            action_horizon=30,
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+        num_train_steps=50_000,
         assets_base_dir="./outputs/assets",
         checkpoint_base_dir="./outputs/checkpoints",
     ),

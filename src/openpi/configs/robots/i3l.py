@@ -1,9 +1,9 @@
 from .base_config import ObservationConfig, StateActionConfig, RobotConfig, register_robot
 
 
-# A1 Robot Configuration
+# SimA1 Robot Configuration
 # Single-arm robot with external and wrist cameras
-A1 = RobotConfig(
+SimA1 = RobotConfig(
     name="robot",
     robot_type="A1",
     observations={
@@ -20,6 +20,7 @@ A1 = RobotConfig(
             resolution=[240, 240]
         ),
     },
+    action_key="action",
     action_dim=7,
     action=[
         StateActionConfig(name="arm", indices=list(range(6)), needs_delta_comp=True),
@@ -32,9 +33,9 @@ A1 = RobotConfig(
 )
 
 
-# R1Pro Robot Configuration
+# SimR1Pro Robot Configuration
 # Dual-arm mobile manipulator with base, torso, and multiple camera views
-R1Pro = RobotConfig(
+SimR1Pro = RobotConfig(
     name="robot",
     robot_type="R1Pro",
     observations={
@@ -57,6 +58,7 @@ R1Pro = RobotConfig(
             resolution=[240, 240]
         ),
     },
+    action_key="action",
     action_dim=23,
     action=[
         StateActionConfig(name="base", indices=list(range(3))),
@@ -102,6 +104,7 @@ RealR1Pro = RobotConfig(
             resolution=[240, 240]
         ),
     },
+    action_key="action",
     action_dim=23,
     action=[
         StateActionConfig(name="base", indices=list(range(3))),
@@ -124,6 +127,6 @@ RealR1Pro = RobotConfig(
 
 
 # Register robots in the global registry
-register_robot("i3l/A1", A1)
-register_robot("i3l/R1Pro", R1Pro)
+register_robot("i3l/SimA1", SimA1)
+register_robot("i3l/SimR1Pro", SimR1Pro)
 register_robot("i3l/RealR1Pro", RealR1Pro)

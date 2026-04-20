@@ -129,18 +129,22 @@ class FakeDataset(Dataset):
 
 def create_b1k_dataset(data_config: _config.DataConfig, action_horizon: int) -> Dataset:
     """Create a behavior dataset for training."""
-    dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id=data_config.repo_id, root=data_config.dataset_root)
+    if isinstance(data_config.repo_id, list):
+        dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id=data_config.repo_id[0], root=os.path.join(data_config.dataset_root, data_config.repo_id[0]))
+        dataset_kwargs = {"repo_ids": data_config.repo_id, **data_config.dataset_kwargs}
+    else:
+        dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id=data_config.repo_id, root=data_config.dataset_root)
+        dataset_kwargs = {"repo_id": data_config.repo_id, **data_config.dataset_kwargs}
     dataset = data_config.data_cls(
-        repo_id=data_config.repo_id,
         root=data_config.dataset_root,
         delta_timestamps={
             key: [t / dataset_meta.fps for t in range(action_horizon)] for key in data_config.action_sequence_keys
         },
-        episodes=data_config.episodes_index,
+        **dataset_kwargs,
     )
 
     if data_config.prompt_from_task:
-        dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(dataset.meta.tasks)])
+        dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(dataset_meta.tasks)])
 
     return dataset
 

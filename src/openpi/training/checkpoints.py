@@ -4,7 +4,7 @@ import asyncio
 import concurrent.futures as futures
 import dataclasses
 import logging
-from typing import Protocol
+from typing import List, Protocol
 
 from etils import epath
 import jax
@@ -73,7 +73,8 @@ def save_state(
         data_config = data_loader.data_config()
         norm_stats = data_config.norm_stats
         if norm_stats is not None and data_config.asset_id is not None:
-            _normalize.save(directory / data_config.asset_id, norm_stats)
+            asset_id = data_config.asset_id if isinstance(data_config.asset_id, str) else data_config.asset_id[0]
+            _normalize.save(directory / asset_id, norm_stats)
 
     # Split params that can be used for inference into a separate item.
     with at.disable_typechecking():
@@ -107,7 +108,10 @@ def restore_state(
     return _merge_params(restored["train_state"], restored["params"])
 
 
-def load_norm_stats(assets_dir: epath.Path | str, asset_id: str) -> dict[str, _normalize.NormStats] | None:
+def load_norm_stats(assets_dir: epath.Path | str, asset_id: str | List[str]) -> dict[str, _normalize.NormStats] | None:
+    if isinstance(asset_id, list):
+        # Only load the first asset_id assuming that the datasets are similar
+        asset_id = asset_id[0]
     norm_stats_dir = epath.Path(assets_dir) / asset_id
     norm_stats = _normalize.load(norm_stats_dir)
     logging.info(f"Loaded norm stats from {norm_stats_dir}")

@@ -3,8 +3,8 @@
 #SBATCH --account=viscam
 #SBATCH --partition=viscam
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:h200:2
-#SBATCH --mem=256G
+#SBATCH --gres=gpu:l40s:2
+#SBATCH --mem=128G
 #SBATCH --cpus-per-task=32
 #SBATCH --time=2-00:00:00
 #SBATCH --output=outputs/sc/openpi_%j.log
@@ -33,7 +33,7 @@ DATE=$(date +%Y%m%d-%H%M%S)
 echo "Current time: $(date)"
 echo "Running with args: $@"
 
-XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/b1k/train_b1k.py pi0_b1k \
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/b1k/train_b1k.py pi05_s2rg_sim \
     --exp_name="openpi_$(date +%Y%m%d_%H%M%S)" \
     --overwrite \
     --batch_size=64 \

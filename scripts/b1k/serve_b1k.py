@@ -22,24 +22,21 @@ class Checkpoint:
 
 
 @dataclasses.dataclass
-class Default:
-    """Use the default policy for the given environment."""
-
-
-@dataclasses.dataclass
 class Args:
     """Arguments for the serve_policy script."""
 
     robot: str
     task: str
+    # Specifies how to load the policy.
+    policy: Checkpoint
 
+    control_mode: str = "receding_horizon"
+    # Number of actions to execute before replanning.
+    action_horizon: int = 15
     # Port to serve the policy on.
     port: int = 8000
     # Record the policy's behavior for debugging.
     record: bool = False
-
-    # Specifies how to load the policy. If not provided, the default policy for the environment will be used.
-    policy: Checkpoint | Default = dataclasses.field(default_factory=Default)
 
 
 def main(args: Args) -> None:
@@ -64,7 +61,14 @@ def main(args: Args) -> None:
     if args.record:
         policy = _policy.PolicyRecorder(policy, "policy_records")
 
-    policy = B1KPolicyWrapper(policy, robot=args.robot, text_prompt=task_prompt)
+    policy = B1KPolicyWrapper(
+        policy=policy,
+        robot=args.robot,
+        text_prompt=task_prompt,
+        control_mode=args.control_mode,
+        action_horizon=args.action_horizon,
+        max_len=config.model.action_horizon,
+    )
 
     hostname = socket.gethostname()
     local_ip = socket.gethostbyname(hostname)

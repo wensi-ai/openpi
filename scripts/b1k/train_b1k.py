@@ -469,7 +469,7 @@ def main(config: _config.TrainConfig):
             pbar.write(f"Step {step}: {info_str}")
             wandb.log(reduced_info, step=step)
             infos = []
-        if step % config.val_log_interval == 0:
+        if config.val_log_interval and step % config.val_log_interval == 0:
             val_loss = compute_validation_loss(
                 config, train_state, mesh, train_state_sharding, replicated_sharding, data_loader
             )
