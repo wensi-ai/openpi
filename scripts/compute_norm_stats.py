@@ -108,7 +108,16 @@ def main(config_name: str, max_frames: int | None = None):
 
     norm_stats = {key: stats.get_statistics() for key, stats in stats.items()}
 
-    output_path = config.assets_dirs / data_config.repo_id
+    # data_config.repo_id may be a tuple/list (multi-task training); use
+    # asset_id as the on-disk path, matching the runtime data loader.
+    asset_subpath = data_config.asset_id if data_config.asset_id is not None else data_config.repo_id
+    if not isinstance(asset_subpath, str):
+        raise ValueError(
+            "Cannot derive a norm-stats output path: data_config.asset_id is "
+            "not set and data_config.repo_id is not a single string. Set "
+            "AssetsConfig(asset_id=...) on multi-repo configs."
+        )
+    output_path = config.assets_dirs / asset_subpath
     print(f"Writing stats to: {output_path}")
     normalize.save(output_path, norm_stats)
 

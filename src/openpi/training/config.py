@@ -63,8 +63,12 @@ class AssetsConfig:
 
 @dataclasses.dataclass(frozen=True)
 class DataConfig:
-    # LeRobot repo id. If None, fake data will be created.
-    repo_id: str | None = None
+    # LeRobot repo id. If None, fake data will be created. May also be a
+    # tuple/list of repo ids; the data loader will load each as a separate
+    # LeRobotDataset and combine them via torch ConcatDataset for multi-task
+    # training. When using multiple repos, set assets.asset_id explicitly so
+    # there is a single normalization-stats path on disk.
+    repo_id: str | tuple[str, ...] | list[str] | None = None
     # Directory within the assets directory containing the data assets.
     asset_id: str | None = None
     # Contains precomputed normalization stats. If None, normalization will not be performed.
@@ -89,6 +93,12 @@ class DataConfig:
 
     # If true, will use the LeRobot dataset task to define the prompt.
     prompt_from_task: bool = False
+
+    # Optional per-repo episode subset. Keys are LeRobot repo ids (matching
+    # entries in `repo_id`); values are the explicit episode indices to load.
+    # Repos absent from the dict (or all repos when this is None) are loaded
+    # in full. Applied uniformly by both training and norm-stats compute.
+    episode_filters: dict[str, list[int]] | None = None
 
     # Only used for RLDS data loader (ie currently only used for DROID).
     rlds_data_dir: str | None = None
@@ -165,8 +175,9 @@ class ModelTransformFactory(GroupFactory):
 
 @dataclasses.dataclass(frozen=True)
 class DataConfigFactory(abc.ABC):
-    # The LeRobot repo id.
-    repo_id: str = tyro.MISSING
+    # The LeRobot repo id. May be a single string or a tuple/list of strings
+    # for multi-task training (see DataConfig.repo_id).
+    repo_id: str | tuple[str, ...] = tyro.MISSING
     # Determines how the assets will be loaded.
     assets: AssetsConfig = dataclasses.field(default_factory=AssetsConfig)
     # Base config that will be updated by the factory.
@@ -178,7 +189,19 @@ class DataConfigFactory(abc.ABC):
 
     def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
         repo_id = self.repo_id if self.repo_id is not tyro.MISSING else None
-        asset_id = self.assets.asset_id or repo_id
+        # asset_id defaults to repo_id only for single-string repos; tuples
+        # of repo ids must specify AssetsConfig(asset_id=...) so the merged
+        # norm_stats live at one well-defined path.
+        if isinstance(repo_id, (tuple, list)):
+            asset_id = self.assets.asset_id
+            if asset_id is None:
+                raise ValueError(
+                    "Multi-repo configs (repo_id is a tuple/list) must set "
+                    "assets=AssetsConfig(asset_id=...) explicitly so a single "
+                    "norm_stats file can be located on disk."
+                )
+        else:
+            asset_id = self.assets.asset_id or repo_id
         return dataclasses.replace(
             self.base_config or DataConfig(),
             repo_id=repo_id,
@@ -983,6 +1006,438 @@ _CONFIGS = [
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
         num_train_steps=20_000,
+        batch_size=16,
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        # Same as pi05_droid_renderscale (drawer) but with action_horizon=32.
+        # Used to serve the run_drawer_h32_3376eps_40k_20260501_223926 checkpoint.
+        name="pi05_droid_renderscale_h32",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id="renderscale/drawer_open",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=16,
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        # Same recipe as pi05_droid_renderscale, but trained on the fridge
+        # open/close molmospaces dataset (430 trajectories per shard x 4 shards).
+        name="pi05_droid_renderscale_fridge",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id="renderscale/fridge_open",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=20_000,
+        batch_size=16,
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        # Same recipe as pi05_droid_renderscale_fridge but trained on the
+        # SIM2REAL-GENERATED fridge dataset at
+        # /viscam/projects/egodex/renderscale/lerobot_data_generated/renderscale/fridge_open_generated
+        # (1000 trajectories converted from molmodata_generated/fridge — varied-prompt run).
+        # Set HF_LEROBOT_HOME=/viscam/projects/egodex/renderscale/lerobot_data_generated
+        # when running compute_norm_stats.py and train.py with this config.
+        name="pi05_droid_renderscale_fridge_generated",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id="renderscale/fridge_open_generated",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=20_000,
+        batch_size=16,
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        # Same as pi05_droid_renderscale_fridge but with action_horizon=32.
+        # Used to serve the run_fridge_h32_1710eps_20260430_222143 checkpoint.
+        # Norm stats live inside the checkpoint, so no separate asset dir is required.
+        name="pi05_droid_renderscale_fridge_h32",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id="renderscale/fridge_open",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=16,
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        # Fridge h32 trained on the fixed-prompt video-generated set staged under
+        # /viscam/projects/egodex/renderscale/lerobot_data_generated/renderscale/fridge_fixed_prompt
+        # (built by convert_molmodata_generated_to_lerobot.py from the matching
+        # generated_*.mp4 + source h5 in molmodata/fridge). Set
+        # HF_LEROBOT_HOME=/viscam/projects/egodex/renderscale/lerobot_data_generated
+        # for compute_norm_stats.py / train.py.
+        name="pi05_droid_renderscale_fridge_fixed_prompt_h32",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id="renderscale/fridge_fixed_prompt",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=16,
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        # Fridge-only h32, capped at the first 1000 episodes of
+        # /viscam/projects/egodex/renderscale/lerobot_data/renderscale/fridge_open
+        # (full repo has 2852 eps) via episode_filters. action_horizon=32, 40k steps.
+        # Set HF_LEROBOT_HOME=/viscam/projects/egodex/renderscale/lerobot_data for both
+        # compute_norm_stats.py and train.py.
+        name="pi05_droid_renderscale_fridge_h32_1k",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id="renderscale/fridge_open",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                episode_filters={
+                    "renderscale/fridge_open": list(range(1000)),
+                },
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=16,
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        # Same as pi05_droid_renderscale_fridge but with action_horizon=50.
+        # Used to serve the run_fridge_h50_1710eps_20260501_180144 checkpoint.
+        # Norm stats live inside the checkpoint, so no separate asset dir is required.
+        name="pi05_droid_renderscale_fridge_h50",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=50,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id="renderscale/fridge_open",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=20_000,
+        batch_size=16,
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        # Same as pi05_droid_renderscale_dishwasher but with action_horizon=50.
+        # Used to serve the run_dishwasher_h50_2226eps_20260503_153723 checkpoint.
+        # Norm stats live inside the checkpoint, so no separate asset dir is required.
+        name="pi05_droid_renderscale_dishwasher_h50",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=50,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id="renderscale/dishwasher_open",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=16,
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        # Same as pi05_droid_renderscale_dishwasher but with action_horizon=32.
+        # Used to serve the run_dishwasher_998eps_h32_20260501_122141 checkpoint.
+        # Norm stats live inside the checkpoint, so no separate asset dir is required.
+        name="pi05_droid_renderscale_dishwasher_h32",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id="renderscale/dishwasher_open",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=16,
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        # Same recipe, trained on the dishwasher open molmospaces dataset
+        # (998 trajectories assembled from three partial parallel-worker runs
+        # with non-overlapping shard indices, so seeds don't collide).
+        name="pi05_droid_renderscale_dishwasher",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id="renderscale/dishwasher_open",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=20_000,
+        batch_size=16,
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        # Same as pi05_droid_renderscale_cabinet but with action_horizon=32.
+        # Used to serve the run_cabinet_h32_1337eps_40k_20260501_133805 checkpoint.
+        name="pi05_droid_renderscale_cabinet_h32",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id="renderscale/cabinet_open",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=16,
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        # Same recipe, trained on the cabinet open molmospaces dataset
+        # (1337 trajectories from the complete 15-shard parallel-worker run;
+        # an earlier 8-shard run in the same dir was discarded since its
+        # seeds 1001..1008 overlap with the _of_15 set).
+        name="pi05_droid_renderscale_cabinet",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id="renderscale/cabinet_open",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=20_000,
+        batch_size=16,
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        # Multi-task molmospaces drawer/fridge/cabinet/dishwasher trained
+        # jointly. Uses the tuple-repo_id path through create_torch_dataset
+        # (torch ConcatDataset over four LeRobotDatasets). Episodes are
+        # sampled in proportion to their frame counts:
+        #   drawer    886740 frames (3376 eps)
+        #   fridge    834501 frames (2852 eps, 11 prompt variants)
+        #   cabinet   332327 frames (1337 eps)
+        #   dishwasher 660156 frames (2226 eps)
+        # Norm stats are computed jointly under assets/<config>/renderscale/all_open/.
+        # See pi05_droid_renderscale_drawer_fridge_h32_minimal below for the
+        # drawer+fridge-only variant trained on the smaller "minimal" datasets.
+        name="pi05_droid_renderscale_all_h32",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id=(
+                "renderscale/drawer_open",
+                "renderscale/fridge_open",
+                "renderscale/cabinet_open",
+                "renderscale/dishwasher_open",
+            ),
+            assets=AssetsConfig(asset_id="renderscale/all_open"),
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=16,
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        # Two-task ConcatDataset on the "minimal" datasets at
+        # /viscam/projects/egodex/renderscale/lerobot_data_minimal/. Source sizes:
+        #   drawer_open    1100 eps / 298593 frames
+        #   fridge_open    2424 eps / 708640 frames
+        # episode_filters caps each repo at the first 1000 episodes for a balanced
+        # ~1k+1k training set. action_horizon=32, 40k steps.
+        # Set HF_LEROBOT_HOME=/viscam/projects/egodex/renderscale/lerobot_data_minimal
+        # for both compute_norm_stats.py and train.py.
+        name="pi05_droid_renderscale_drawer_fridge_h32_minimal",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id=(
+                "renderscale/drawer_open",
+                "renderscale/fridge_open",
+            ),
+            assets=AssetsConfig(asset_id="renderscale/drawer_fridge_open_minimal"),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                episode_filters={
+                    "renderscale/drawer_open": list(range(1000)),
+                    "renderscale/fridge_open": list(range(1000)),
+                },
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
         batch_size=16,
         num_workers=4,
         freeze_filter=pi0_config.Pi0Config(

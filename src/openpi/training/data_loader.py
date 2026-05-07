@@ -130,25 +130,37 @@ class FakeDataset(Dataset):
 def create_torch_dataset(
     data_config: _config.DataConfig, action_horizon: int, model_config: _model.BaseModelConfig
 ) -> Dataset:
-    """Create a dataset for training."""
+    """Create a dataset for training. Supports a single LeRobot repo or a
+    tuple/list of repo ids (combined via torch.utils.data.ConcatDataset)."""
     repo_id = data_config.repo_id
     if repo_id is None:
         raise ValueError("Repo ID is not set. Cannot create dataset.")
     if repo_id == "fake":
         return FakeDataset(model_config, num_samples=1024)
 
-    dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
-    dataset = lerobot_dataset.LeRobotDataset(
-        data_config.repo_id,
-        delta_timestamps={
-            key: [t / dataset_meta.fps for t in range(action_horizon)] for key in data_config.action_sequence_keys
-        },
-    )
+    repo_ids = [repo_id] if isinstance(repo_id, str) else list(repo_id)
 
-    if data_config.prompt_from_task:
-        dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(dataset_meta.tasks)])
+    episode_filters = data_config.episode_filters or {}
+    sub_datasets = []
+    for rid in repo_ids:
+        dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(rid)
+        ds = lerobot_dataset.LeRobotDataset(
+            rid,
+            episodes=episode_filters.get(rid),
+            delta_timestamps={
+                key: [t / dataset_meta.fps for t in range(action_horizon)]
+                for key in data_config.action_sequence_keys
+            },
+        )
+        if data_config.prompt_from_task:
+            # Wrap each source with its own PromptFromLeRobotTask so per-sample
+            # task_index is resolved against the source's own tasks.jsonl.
+            ds = TransformedDataset(ds, [_transforms.PromptFromLeRobotTask(dataset_meta.tasks)])
+        sub_datasets.append(ds)
 
-    return dataset
+    if len(sub_datasets) == 1:
+        return sub_datasets[0]
+    return torch.utils.data.ConcatDataset(sub_datasets)
 
 
 def create_rlds_dataset(
