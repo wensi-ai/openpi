@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH --job-name="openpi_train"
 #SBATCH --account=viscam
-#SBATCH --partition=viscam
+#SBATCH --partition=sc-loprio
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:l40s:2
+#SBATCH --gres=gpu:h200:4
 #SBATCH --mem=128G
 #SBATCH --cpus-per-task=32
 #SBATCH --time=2-00:00:00
@@ -28,15 +28,23 @@ echo "working directory="$SLURM_SUBMIT_DIR
 
 source /vision/u/$(whoami)/libs/openpi/.venv/bin/activate
 
-DATE=$(date +%Y%m%d-%H%M%S)
+CONFIG_NAME=${1:-pi05_s2rg_droid_real}
+if [ $# -gt 0 ]; then
+    shift
+fi
+
+EXP_NAME=${EXP_NAME:-${CONFIG_NAME}_sc_lowprio}
 
 echo "Current time: $(date)"
+echo "CONFIG_NAME=$CONFIG_NAME"
+echo "EXP_NAME=$EXP_NAME"
 echo "Running with args: $@"
 
-XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/b1k/train_b1k.py pi05_s2rg_sim \
-    --exp_name="openpi_$(date +%Y%m%d_%H%M%S)" \
-    --overwrite \
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/b1k/train_b1k.py "$CONFIG_NAME" \
+    --exp_name="$EXP_NAME" \
+    --resume \
     --batch_size=64 \
+    "$@"
 
 echo "Job finished."
 exit 0

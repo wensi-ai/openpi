@@ -46,10 +46,11 @@ def main(args: Args) -> None:
     # log the prompt used
     logging.info(f"Using robot: {args.robot}, prompt: {task_prompt}")
     
-    # Load training config and override robot_type
+    # Load training config and override request-specific fields.
     config = _config.get_config(args.policy.config)
+    logging.info("Using norm stats for task repo: %s", args.task)
     config = dataclasses.replace(
-        config, data=dataclasses.replace(config.data, robot_config_name=args.robot)
+        config, data=dataclasses.replace(config.data, repo_id=args.task, robot_config_name=args.robot)
     )
 
     policy = _policy_config.create_trained_policy(

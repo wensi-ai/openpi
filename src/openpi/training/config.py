@@ -375,6 +375,31 @@ class LeRobotB1KDataConfig(DataConfigFactory):
     extra_delta_transform: bool = True
     action_sequence_keys: Sequence[str] = ("action",)
 
+    def _build_delta_mappings(self, robot_config) -> list[tuple[list[int], list[int]]]:
+        state_slices = []
+        state_offset = 0
+        for proprio_config in robot_config.proprio:
+            dim = 1 if proprio_config.is_eef else len(proprio_config.indices)
+            state_slices.append(list(range(state_offset, state_offset + dim)))
+            state_offset += dim
+
+        mappings = []
+        state_slice_index = 0
+        for action_config in robot_config.action:
+            if action_config.is_eef or not action_config.needs_delta_comp:
+                continue
+            action_dim = len(action_config.indices)
+            while state_slice_index < len(state_slices) and len(state_slices[state_slice_index]) != action_dim:
+                state_slice_index += 1
+            if state_slice_index >= len(state_slices):
+                raise ValueError(
+                    f"Could not find a state slice for delta action group {action_config.name!r} "
+                    f"with dim {action_dim} in robot config {robot_config.robot_type!r}."
+                )
+            mappings.append((action_config.indices, state_slices[state_slice_index]))
+            state_slice_index += 1
+        return mappings
+
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
         robot_config = ROBOT_REGISTRY[self.robot_config_name]
@@ -408,19 +433,11 @@ class LeRobotB1KDataConfig(DataConfigFactory):
 
         # extra delta transform.
         if self.extra_delta_transform:
-            # Build delta action mask based on robot_config.action
-            # For each action component, apply delta if needs_delta_comp is True
-            delta_indices = []
-            for action_config in robot_config.action:
-                if action_config.needs_delta_comp:
-                    delta_indices.extend(action_config.indices)
-            
-            # Create mask: True for delta actions, False for absolute actions
-            delta_action_mask = [i in delta_indices for i in range(robot_config.action_dim)]
+            delta_mappings = self._build_delta_mappings(robot_config)
             
             data_transforms = data_transforms.push(
-                inputs=[_transforms.DeltaActions(delta_action_mask)],
-                outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+                inputs=[_transforms.MappedDeltaActions(delta_mappings)],
+                outputs=[_transforms.MappedAbsoluteActions(delta_mappings)],
             )
 
         # Model transforms include things like tokenizing the prompt and action targets
@@ -737,13 +754,36 @@ _CONFIGS = [
   
     #  ================= behavior configs =================
     TrainConfig(
-        name="pi05_single",
-        model=pi0_config.Pi0Config(action_horizon=30, pi05=True),
+        name="pi05_test",
+        model=pi0_config.Pi0Config(action_horizon=32, pi05=True),
         data=LeRobotB1KDataConfig(
-            repo_id="i3l/bread",
+            repo_id="wensi-ai/radio",
             base_config=DataConfig(
                 data_cls=LeRobotDataset,
-                dataset_root="/lambda/nfs/jiajun-stanford-lab/Research/data/lerobot/i3l/bread",
+                dataset_root="/lambda/nfs/jiajun-stanford-lab/Research/data/lerobot/wensi-ai/radio",
+                prompt_from_task=True,
+            ),
+            robot_config_name="s2rg/sim_r1pro",
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        assets_base_dir="./outputs/assets",
+        checkpoint_base_dir="./outputs/checkpoints",
+    ),
+
+    TrainConfig(
+        name="pi05_single",
+        model=pi0_config.Pi0Config(
+            action_horizon=32,
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotB1KDataConfig(
+            repo_id="wensi-ai/bread",
+            base_config=DataConfig(
+                data_cls=LeRobotDataset,
+                dataset_root="/lambda/nfs/jiajun-stanford-lab/Research/data/lerobot/wensi-ai/bread",
                 prompt_from_task=True,
                 dataset_kwargs={
                     "episodes": list(range(100)),
@@ -752,24 +792,35 @@ _CONFIGS = [
             robot_config_name="i3l/RealR1Pro",
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        num_train_steps=50_000,
+        freeze_filter=pi0_config.Pi0Config(
+            action_horizon=32,
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        num_train_steps=40_000,
         assets_base_dir="./outputs/assets",
         checkpoint_base_dir="./outputs/checkpoints",
     ),
 
     TrainConfig(
         name="pi05_i3l_sim",
-        model=pi0_config.Pi0Config(action_horizon=30, pi05=True),
+        model=pi0_config.Pi0Config(
+            action_horizon=32,
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
         data=LeRobotB1KDataConfig(
-            repo_id=["i3l/open-demo-0-100", "i3l/open-int-1-20"],
+            repo_id=["wensi-ai/open-demo-0-100", "wensi-ai/open-int-1-20"],
             base_config=DataConfig(
                 data_cls=I3LLeRobotDataset,
                 dataset_root="/lambda/nfs/jiajun-stanford-lab/Research/data/lerobot",
                 prompt_from_task=True,
                 dataset_kwargs={
                     "episodes": {
-                        "i3l/open-demo-0-100": list(range(40)),
-                        "i3l/open-int-1-20": list(range(20)),
+                        "wensi-ai/open-demo-0-100": list(range(40)),
+                        "wensi-ai/open-int-1-20": list(range(20)),
                     },
                     "sampling_mode": True,
                     "reweight_strategy": "sirius",
@@ -778,16 +829,25 @@ _CONFIGS = [
             robot_config_name="i3l/SimR1Pro",
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        num_train_steps=50_000,
-        # val_repo_id="iiil/pnp",
-        # val_episodes_index=list(range(100, 150)),
+        freeze_filter=pi0_config.Pi0Config(
+            action_horizon=32,
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        num_train_steps=40_000,
         assets_base_dir="./outputs/assets",
         checkpoint_base_dir="./outputs/checkpoints",
     ),
 
      TrainConfig(
         name="pi05_i3l_real",
-        model=pi0_config.Pi0Config(action_horizon=30, pi05=True),
+        model=pi0_config.Pi0Config(
+            action_horizon=32,
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
         data=LeRobotB1KDataConfig(
             repo_id=["i3l/books-demo-0-100", "i3l/books-int-1-25"],
             base_config=DataConfig(
@@ -796,8 +856,8 @@ _CONFIGS = [
                 prompt_from_task=True,
                 dataset_kwargs={
                     "episodes": {
-                        "i3l/books-demo-0-100": list(range(100)),
-                        "i3l/books-int-1-25": list(range(25)),
+                        "wensi-ai/books-demo-0-100": list(range(100)),
+                        "wensi-ai/books-int-1-25": list(range(25)),
                     },
                     "sampling_mode": True,
                     "reweight_strategy": "i3l",
@@ -806,21 +866,27 @@ _CONFIGS = [
             robot_config_name="i3l/RealR1Pro",
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        num_train_steps=50_000,
+        freeze_filter=pi0_config.Pi0Config(
+            action_horizon=32,
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        num_train_steps=40_000,
         assets_base_dir="./outputs/assets",
         checkpoint_base_dir="./outputs/checkpoints",
     ),
 
     TrainConfig(
-        name="pi05_s2rg_sim",
+        name="pi05_s2rg_droid_sim",
         model=pi0_config.Pi0Config(
-            action_horizon=30,
+            action_horizon=32,
             pi05=True,
             paligemma_variant="gemma_2b_lora",
             action_expert_variant="gemma_300m_lora",
         ),
         data=LeRobotB1KDataConfig(
-            repo_id=["s2rg/DroidMugTask", "s2rg/DroidBowlTask", "s2rg/DroidEggTask", "s2rg/DroidAppleTask"],
+            repo_id=["wensi-ai/DroidMugTask", "wensi-ai/DroidBowlTask", "wensi-ai/DroidEggTask", "wensi-ai/DroidAppleTask"],
             base_config=DataConfig(
                 data_cls=MultiLeRobotDataset,
                 prompt_from_task=True,
@@ -830,27 +896,27 @@ _CONFIGS = [
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         freeze_filter=pi0_config.Pi0Config(
-            action_horizon=30,
+            action_horizon=32,
             pi05=True,
             paligemma_variant="gemma_2b_lora",
             action_expert_variant="gemma_300m_lora",
         ).get_freeze_filter(),
         ema_decay=None,
-        num_train_steps=50_000,
+        num_train_steps=40_000,
         assets_base_dir="./outputs/assets",
         checkpoint_base_dir="./outputs/checkpoints",
     ),
 
     TrainConfig(
-        name="pi05_s2rg_real",
+        name="pi05_s2rg_droid_real",
         model=pi0_config.Pi0Config(
-            action_horizon=30,
+            action_horizon=32,
             pi05=True,
             paligemma_variant="gemma_2b_lora",
             action_expert_variant="gemma_300m_lora",
         ),
         data=LeRobotB1KDataConfig(
-            repo_id=["s2rg/DroidMugTask", "s2rg/DroidBowlTask", "s2rg/DroidEggTask", "s2rg/DroidAppleTask"],
+            repo_id=["wensi-ai/DroidMugTask", "wensi-ai/DroidBowlTask", "wensi-ai/DroidEggTask", "wensi-ai/DroidAppleTask"],
             base_config=DataConfig(
                 data_cls=MultiLeRobotDataset,
                 prompt_from_task=True,
@@ -860,17 +926,77 @@ _CONFIGS = [
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         freeze_filter=pi0_config.Pi0Config(
-            action_horizon=30,
+            action_horizon=32,
             pi05=True,
             paligemma_variant="gemma_2b_lora",
             action_expert_variant="gemma_300m_lora",
         ).get_freeze_filter(),
         ema_decay=None,
-        num_train_steps=50_000,
+        num_train_steps=40_000,
         assets_base_dir="./outputs/assets",
         checkpoint_base_dir="./outputs/checkpoints",
     ),
-    
+
+    TrainConfig(
+        name="pi05_s2rg_radio_sim",
+        model=pi0_config.Pi0Config(
+            action_horizon=32,
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotB1KDataConfig(
+            repo_id="wensi-ai/radio",
+            base_config=DataConfig(
+                data_cls=LeRobotDataset,
+                prompt_from_task=True,
+                dataset_root="/vision/u/wsai/data/lerobot/wensi-ai/radio",
+            ),
+            robot_config_name="s2rg/sim_r1pro",
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            action_horizon=32,
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+        num_train_steps=40_000,
+        assets_base_dir="./outputs/assets",
+        checkpoint_base_dir="./outputs/checkpoints",
+    ),
+
+    TrainConfig(
+        name="pi05_s2rg_radio_real",
+        model=pi0_config.Pi0Config(
+            action_horizon=32,
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotB1KDataConfig(
+            repo_id="wensi-ai/radio",
+            base_config=DataConfig(
+                data_cls=LeRobotDataset,
+                prompt_from_task=True,
+                dataset_root="/vision/u/wsai/data/lerobot/wensi-ai/radio",
+            ),
+            robot_config_name="s2rg/s2rg_r1pro",
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            action_horizon=32,
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+        num_train_steps=40_000,
+        assets_base_dir="./outputs/assets",
+        checkpoint_base_dir="./outputs/checkpoints",
+    ),
+
     #
     # Fine-tuning Libero configs.
     #
