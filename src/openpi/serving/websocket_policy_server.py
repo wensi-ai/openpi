@@ -4,12 +4,20 @@ import logging
 import time
 import traceback
 
+import numpy as np
 from openpi_client import base_policy as _base_policy
 from openpi_client import msgpack_numpy
 import websockets.asyncio.server as _server
 import websockets.frames
 
 logger = logging.getLogger(__name__)
+
+
+def _first_action_step(actions):
+    actions = np.asarray(actions)
+    if actions.ndim <= 1:
+        return actions[:8]
+    return actions[0, :8]
 
 
 class WebsocketPolicyServer:
@@ -56,10 +64,18 @@ class WebsocketPolicyServer:
             try:
                 start_time = time.monotonic()
                 obs = msgpack_numpy.unpackb(await websocket.recv())
+                if obs.get("reset", False):
+                    self._policy.reset()
+                    prev_total_time = None
+                    logger.info(f"Reset policy state for {websocket.remote_address}")
+                    continue
 
                 infer_time = time.monotonic()
                 action = self._policy.infer(obs)
                 infer_time = time.monotonic() - infer_time
+                action_value = action.get("action", action.get("actions"))
+                if action_value is not None:
+                    action["action"] = _first_action_step(action_value)
 
                 action["server_timing"] = {
                     "infer_ms": infer_time * 1000,
