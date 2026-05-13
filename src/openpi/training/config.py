@@ -1223,6 +1223,109 @@ _CONFIGS = [
         ema_decay=None,
     ),
     TrainConfig(
+        # GEN variant of pi05_droid_renderscale_fridge_7_m_h32 — joint training on
+        # fridge_7_gen + fridge_m_gen. Reuses the SIM-derived norm stats via
+        # asset_id="renderscale/fridge_7_m_sim" (sim and gen share identical h5
+        # actions, so the stats are identical). To set up:
+        #   mkdir -p assets/pi05_droid_renderscale_fridge_7_m_h32_gen/renderscale/fridge_7_m_sim
+        #   ln -sf assets/pi05_droid_renderscale_fridge_7_m_h32/renderscale/fridge_7_m_sim/norm_stats.json \
+        #          assets/pi05_droid_renderscale_fridge_7_m_h32_gen/renderscale/fridge_7_m_sim/norm_stats.json
+        # Stage data: mkdir /scr/ravenh/fridge_7_m_gen && ln -s
+        #   /scr/ravenh/fridge_7/lerobot_gen/fridge_7_gen,
+        #   /scr/ravenh/fridge_m/lerobot_gen/fridge_m_gen
+        # into it, then HF_LEROBOT_HOME=/scr/ravenh/fridge_7_m_gen train.py.
+        name="pi05_droid_renderscale_fridge_7_m_h32_gen",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id=(
+                "fridge_7_gen",
+                "fridge_m_gen",
+            ),
+            assets=AssetsConfig(asset_id="renderscale/fridge_7_m_sim"),
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=16,
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        # 3drawers sim run pulled from HF Ravenh97/lerobot_data subfolder
+        # 3drawers_sim/. Set HF_LEROBOT_HOME=/viscam/projects/egodex/renderscale/lerobot_data_3drawers
+        # for both compute_norm_stats.py and train.py. Norm stats at
+        # assets/<config>/3drawers_sim/norm_stats.json.
+        name="pi05_droid_renderscale_3drawers_h32",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id="3drawers_sim",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=16,  # default; pipeline.sh overrides to --batch_size=48
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        # Joint training on fridge_7_sim + fridge_m_sim pulled from HF repo
+        # Ravenh97/lerobot_data (subfolders fridge_7_sim/ and fridge_m_sim/).
+        # Set HF_LEROBOT_HOME=/viscam/projects/egodex/renderscale/lerobot_data_fridge_7_m
+        # so LeRobot finds both subdirs locally. Norm stats land under
+        # assets/<config>/renderscale/fridge_7_m_sim/.
+        name="pi05_droid_renderscale_fridge_7_m_h32",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id=(
+                "fridge_7_sim",
+                "fridge_m_sim",
+            ),
+            assets=AssetsConfig(asset_id="renderscale/fridge_7_m_sim"),
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=16,
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
         # Same as pi05_droid_renderscale_fridge but with action_horizon=32.
         # Used to serve the run_fridge_h32_1710eps_20260430_222143 checkpoint.
         # Norm stats live inside the checkpoint, so no separate asset dir is required.
