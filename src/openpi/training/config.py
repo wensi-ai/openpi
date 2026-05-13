@@ -1223,6 +1223,64 @@ _CONFIGS = [
         ema_decay=None,
     ),
     TrainConfig(
+        # fridge_m_0.7_pd sim run from sibling Agent_fridge_m_0.7_pd on viscam4.
+        # Wider robot placement rotation range (0.7 vs base 0.2) + sysid PD gains.
+        # HF subfolder: fridge_m_0.7_pd_sim/. Local dataset will be downloaded to
+        # /scr/ravenh/fridge_m_0.7_pd/lerobot_sim/fridge_m_0.7_pd_sim/.
+        name="pi05_droid_renderscale_fridge_m_0_7_pd_h32",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id="fridge_m_0.7_pd_sim",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=16,
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        # fridge_m_0.7_pd GEN variant — same h5 actions as sim, but with
+        # sim2real-rendered exo + wrist mp4s. Built from
+        # Ravenh97/generated_video:fridge_m_0.7_pd/ (gen mp4s) + sim h5s.
+        # Local dataset at /scr/ravenh/fridge_m_0_7_pd_train/lerobot_home/fridge_m_0.7_pd_gen/.
+        name="pi05_droid_renderscale_fridge_m_0_7_pd_h32_gen",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id="fridge_m_0.7_pd_gen",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=16,
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
         # GEN variant of pi05_droid_renderscale_fridge_7_m_h32 — joint training on
         # fridge_7_gen + fridge_m_gen. Reuses the SIM-derived norm stats via
         # asset_id="renderscale/fridge_7_m_sim" (sim and gen share identical h5
@@ -1249,6 +1307,35 @@ _CONFIGS = [
                 "fridge_m_gen",
             ),
             assets=AssetsConfig(asset_id="renderscale/fridge_7_m_sim"),
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=16,
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        # 3drawers GEN variant. Pulls HF Ravenh97/lerobot_data subfolder
+        # 3drawers_gen/. Set HF_LEROBOT_HOME=/scr/ravenh/3drawers_gen/lerobot_gen
+        # locally. Compute fresh norm stats (won't bother symlinking from sim
+        # since user explicitly asked to compute them).
+        name="pi05_droid_renderscale_3drawers_h32_gen",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id="3drawers_gen",
             base_config=DataConfig(prompt_from_task=True),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
