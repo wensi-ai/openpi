@@ -30,6 +30,8 @@ class Args:
     # Specifies how to load the policy.
     policy: Checkpoint
 
+    # LeRobot repo id whose checkpoint assets contain the norm stats.
+    repo_id: str | None = None
     control_mode: str = "receding_horizon"
     # Number of actions to execute before replanning.
     action_horizon: int = 15
@@ -48,9 +50,10 @@ def main(args: Args) -> None:
     
     # Load training config and override request-specific fields.
     config = _config.get_config(args.policy.config)
-    logging.info("Using norm stats for task repo: %s", args.task)
+    norm_stats_repo_id = args.repo_id or args.task
+    logging.info("Using norm stats for repo: %s", norm_stats_repo_id)
     config = dataclasses.replace(
-        config, data=dataclasses.replace(config.data, repo_id=args.task, robot_config_name=args.robot)
+        config, data=dataclasses.replace(config.data, repo_id=norm_stats_repo_id, robot_config_name=args.robot)
     )
 
     policy = _policy_config.create_trained_policy(
