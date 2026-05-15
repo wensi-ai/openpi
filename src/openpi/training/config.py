@@ -1379,6 +1379,98 @@ _CONFIGS = [
         ema_decay=None,
     ),
     TrainConfig(
+        # 3drawers_v2 sim — extended 3drawers sim run built from
+        # Ravenh97/sim_data:3drawers/sim_chunks/ (17 chunks). LeRobot dataset
+        # pushed to Ravenh97/lerobot_data:3drawers_v2/. Local at
+        # /scr/ravenh/3drawers_v2_train/lerobot_home/3drawers_v2/.
+        name="pi05_droid_renderscale_3drawers_v2_h32",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id="3drawers_v2",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=16,  # default; launch overrides to --batch_size=72 on 6x H200
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        # 3drawers_v2 GEN variant — same per-step actions+qpos as 3drawers_v2,
+        # but RGB streams come from Wan2.1 1.3B sim2real generation
+        # (Ravenh97/generated_video:3drawers/gen_chunks/). LeRobot dataset
+        # pushed to Ravenh97/lerobot_data:3drawers_v2_gen/. Local at
+        # /scr/ravenh/3drawers_v2_gen/lerobot_home/3drawers_v2_gen/.
+        name="pi05_droid_renderscale_3drawers_v2_h32_gen",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id="3drawers_v2_gen",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=16,  # default; launch overrides to --batch_size=48 on 4x L40S
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        # fridge_m_0.7_pd DR variant capped at first 1000 episodes via
+        # DataConfig.episode_filters. Pulls HF Ravenh97/lerobot_data:fridge_m_0.7_pd_dr/.
+        # Local: /scr/ravenh/fridge_m_0_7_pd_dr_train/lerobot_home/fridge_m_0.7_pd_dr/.
+        name="pi05_droid_renderscale_fridge_m_0_7_pd_dr_first1k_h32",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id="fridge_m_0.7_pd_dr",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                episode_filters={
+                    "fridge_m_0.7_pd_dr": list(range(1000)),
+                },
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=16,  # default; launch overrides to --batch_size=72 on 6x H200
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
         # Joint training on fridge_7_sim + fridge_m_sim pulled from HF repo
         # Ravenh97/lerobot_data (subfolders fridge_7_sim/ and fridge_m_sim/).
         # Set HF_LEROBOT_HOME=/viscam/projects/egodex/renderscale/lerobot_data_fridge_7_m
