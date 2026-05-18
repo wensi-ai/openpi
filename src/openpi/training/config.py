@@ -1531,6 +1531,37 @@ _CONFIGS = [
         ema_decay=None,
     ),
     TrainConfig(
+        # Combined fridge_m_v2_gen + fridge_m_0.7_pd_gen multi-task (ConcatDataset).
+        # fridge_m_v2_gen:     1272 eps / 380,821 frames (HF Ravenh97/lerobot_data:fridge_m_v2_gen).
+        # fridge_m_0.7_pd_gen: 1018 eps / 304,491 frames (HF Ravenh97/lerobot_data:fridge_m_0.7_pd_gen).
+        # Per-frame uniform sampling -> fridge_m_v2_gen 56% / fridge_m_0.7_pd_gen 44% by frame count.
+        # Norm stats land at assets/<cfg>/fridge_m_v2_gen_plus_0_7_pd_gen/norm_stats.json.
+        name="pi05_droid_renderscale_fridge_m_v2_gen_plus_0_7_pd_gen_h32",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id=("fridge_m_v2_gen", "fridge_m_0.7_pd_gen"),
+            assets=AssetsConfig(asset_id="fridge_m_v2_gen_plus_0_7_pd_gen"),
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=72,  # 12/GPU on 6x H200; divisible by 4/6/8 GPUs (norm stats compatibility)
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
         # Combined fridge_m_sim + fridge_m_v2 multi-task (ConcatDataset).
         # fridge_m_sim: 666 eps / 198,756 frames (HF Ravenh97/lerobot_data:fridge_m_sim).
         # fridge_m_v2:  1272 eps / 380,821 frames (HF Ravenh97/lerobot_data:fridge_m_v2).
