@@ -1438,6 +1438,36 @@ _CONFIGS = [
         ema_decay=None,
     ),
     TrainConfig(
+        # fridge_m_2house sim — 2-house variant of fridge_m sim with cam_rand
+        # augmentation. 90 chunks across 2 houses (house_1: 44 chunks 001-049,
+        # house_2: 46 chunks 051-098). ~990 episodes, 15 fps. LeRobot dataset
+        # pushed to Ravenh97/lerobot_data:fridge_m_2house/. Local at
+        # /scr/ravenh/fridge_m_2house_train/lerobot_home/fridge_m_2house/.
+        name="pi05_droid_renderscale_fridge_m_2house_h32",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id="fridge_m_2house",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=72,  # 18/GPU on 4x L40S; divisible by 4/6/8 GPUs (norm stats compatibility)
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
         # fridge_m_v2 sim — extended fridge_m sim run with cam_rand augmentation
         # (camera_extrinsics_pos_noise=0.05, rot_noise=5deg). 36 chunks across
         # 4 datagen workers (chunks 001-010 + 101-111 + 201-208 + 301-307).
@@ -1531,6 +1561,36 @@ _CONFIGS = [
         ema_decay=None,
     ),
     TrainConfig(
+        # Combined dresser_gen + 3drawers_v2_gen multi-task (ConcatDataset).
+        # dresser_gen:      to-be-converted; ~1250 trajs / 76 chunks gen pipeline 2026-05-18.
+        # 3drawers_v2_gen:  ~965 eps (HF Ravenh97/lerobot_data:3drawers_v2_gen).
+        # Norm stats land at assets/<cfg>/dresser_gen_plus_3drawers_v2_gen/norm_stats.json.
+        name="pi05_droid_renderscale_dresser_gen_plus_3drawers_v2_gen_h32",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id=("dresser_gen", "3drawers_v2_gen"),
+            assets=AssetsConfig(asset_id="dresser_gen_plus_3drawers_v2_gen"),
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=72,  # 12/GPU on 6x H200; divisible by 4/6/8 GPUs (norm stats compatibility)
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
         # Combined fridge_m_v2_gen + fridge_m_0.7_pd_gen multi-task (ConcatDataset).
         # fridge_m_v2_gen:     1272 eps / 380,821 frames (HF Ravenh97/lerobot_data:fridge_m_v2_gen).
         # fridge_m_0.7_pd_gen: 1018 eps / 304,491 frames (HF Ravenh97/lerobot_data:fridge_m_0.7_pd_gen).
@@ -1593,6 +1653,37 @@ _CONFIGS = [
         ema_decay=None,
     ),
     TrainConfig(
+        # Combined fridge_m_0.7_pd_sim + fridge_m_v2 multi-task (ConcatDataset).
+        # fridge_m_0.7_pd_sim: 1018 eps / 304,491 frames (HF Ravenh97/lerobot_data:fridge_m_0.7_pd_sim).
+        # fridge_m_v2:         1272 eps / 380,821 frames (HF Ravenh97/lerobot_data:fridge_m_v2).
+        # Per-frame uniform sampling -> fridge_m_v2 56% / fridge_m_0.7_pd_sim 44% by frame count.
+        # Norm stats land at assets/<cfg>/fridge_m_0_7_pd_sim_plus_v2/norm_stats.json.
+        name="pi05_droid_renderscale_fridge_m_0_7_pd_sim_plus_v2_h32",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id=("fridge_m_v2", "fridge_m_0.7_pd_sim"),
+            assets=AssetsConfig(asset_id="fridge_m_0_7_pd_sim_plus_v2"),
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=48,  # default: 12/GPU on 4x L40S; train.py CLI override to 64/72 if GPU memory permits
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
         # 3drawers_v2 DR variant — sim-rendered RGB with domain randomization
         # (texture_swap + bind_untextured, DR_COUNT=5). 5450 episodes,
         # 1,467,350 frames, 15 fps. LeRobot dataset pushed to
@@ -1614,6 +1705,46 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
         num_train_steps=40_000,
         batch_size=72,  # 12/GPU on 6x H200; also divisible by 4 GPUs (norm stats compatibility)
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        # Combined fridge_m_0.7_pd_dr + fridge_m_v2_dr multi-task (ConcatDataset),
+        # each capped at first 1000 episodes via DataConfig.episode_filters
+        # (200 trajs × 5 DR variants = 1000 episodes, so this is the first 200
+        # trajs of each source dataset, all DR variants).
+        # Both are DR-pushed (datasets 4.x 'List' feature) — wrappers in
+        # /scr/ravenh/fridge_m_0_7_pd_dr_plus_v2_dr_train/ apply the
+        # List->Sequence alias before invoking openpi scripts.
+        # Norm stats land at assets/<cfg>/fridge_m_0_7_pd_dr_plus_v2_dr_first1k/norm_stats.json.
+        name="pi05_droid_renderscale_fridge_m_0_7_pd_dr_plus_v2_dr_first1k_h32",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id=("fridge_m_0.7_pd_dr", "fridge_m_v2_dr"),
+            assets=AssetsConfig(asset_id="fridge_m_0_7_pd_dr_plus_v2_dr_first1k"),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                episode_filters={
+                    "fridge_m_0.7_pd_dr": list(range(1000)),
+                    "fridge_m_v2_dr": list(range(1000)),
+                },
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=72,  # 12/GPU on 6x H200; divisible by 4/6/8 GPUs (norm stats compatibility)
         num_workers=4,
         freeze_filter=pi0_config.Pi0Config(
             pi05=True,
