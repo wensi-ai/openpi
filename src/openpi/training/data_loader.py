@@ -7,6 +7,19 @@ from typing import Literal, Protocol, SupportsIndex, TypeVar
 
 import jax
 import jax.numpy as jnp
+
+# datasets 3.6.0 (pinned in this venv) predates the top-level `List` feature
+# type added in datasets 4.x. LeRobot datasets pushed by 4.x tooling (e.g. the
+# DR variants like 3drawers_v2_dr) declare fixed-length array columns as
+# `List`, which 3.6.0's Features.from_dict rejects with "Feature type 'List'
+# not found". The on-disk layout is identical to 3.x `Sequence`, so alias
+# `List` -> `Sequence` before lerobot/datasets load anything.
+from datasets.features.features import _FEATURE_TYPES as _ds_feature_types
+from datasets.features.features import Sequence as _ds_sequence
+
+if "List" not in _ds_feature_types:
+    _ds_feature_types["List"] = _ds_sequence
+
 import lerobot.common.datasets.lerobot_dataset as lerobot_dataset
 import numpy as np
 import torch
