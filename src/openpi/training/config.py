@@ -456,6 +456,12 @@ class LeRobotMolmospacesDroidDataConfig(DataConfigFactory):
     writes and per-episode mp4 encoding cost during conversion.
     """
 
+    # If set, binarize the gripper observation (observation/gripper_position)
+    # to {0.0, 1.0} at this threshold (>= threshold -> 1.0) before it enters
+    # the state vector. Applied identically at training, norm-stat, and
+    # inference time. None disables binarization (default).
+    binarize_gripper_threshold: float | None = None
+
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
         repack_transform = _transforms.Group(
@@ -472,8 +478,13 @@ class LeRobotMolmospacesDroidDataConfig(DataConfigFactory):
                 )
             ]
         )
+        gripper_transforms = (
+            [_transforms.BinarizeGripper(threshold=self.binarize_gripper_threshold)]
+            if self.binarize_gripper_threshold is not None
+            else []
+        )
         data_transforms = _transforms.Group(
-            inputs=[droid_policy.DroidInputs(model_type=model_config.model_type)],
+            inputs=[*gripper_transforms, droid_policy.DroidInputs(model_type=model_config.model_type)],
             outputs=[droid_policy.DroidOutputs()],
         )
         model_transforms = ModelTransformFactory()(model_config)
@@ -2088,6 +2099,42 @@ _CONFIGS = [
     # RoboArena & PolaRiS configs.
     *roboarena_config.get_roboarena_configs(),
     *polaris_config.get_polaris_configs(),
+    TrainConfig(
+        # Combined 3drawers_v2 + dresser_sim multi-task (torch ConcatDataset).
+        # 3drawers_v2: HF Ravenh97/lerobot_data:3drawers_v2/, local
+        #   ~/.cache/huggingface/lerobot/3drawers_v2.
+        # dresser_sim: HF Ravenh97/lerobot_data:dresser_sim/ (1207 eps /
+        #   337,566 frames), local
+        #   ~/.cache/huggingface/lerobot/Ravenh97/dresser_sim_lerobot.
+        # Gripper *observation* (gripper_position) is pre-binarized on disk,
+        # per-dataset thresholds; gripper *action* already binary in source.
+        # Norm stats -> assets/<cfg>/3drawers_v2_plus_dresser_sim/norm_stats.json.
+        name="pi05_droid_renderscale_3drawers_v2_plus_dresser_h32",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id=("3drawers_v2", "Ravenh97/dresser_sim_lerobot"),
+            assets=AssetsConfig(asset_id="3drawers_v2_plus_dresser_sim"),
+            base_config=DataConfig(prompt_from_task=True),
+            binarize_gripper_threshold=0.5,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=64,  # divisible by 8x B200; launch overrides --batch_size after probe
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
 ]
 
 if len({config.name for config in _CONFIGS}) != len(_CONFIGS):

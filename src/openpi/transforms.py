@@ -245,6 +245,28 @@ class AbsoluteActions(DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class BinarizeGripper(DataTransformFn):
+    """Binarize a continuous gripper observation to {0.0, 1.0} at a threshold.
+
+    Values >= ``threshold`` map to 1.0, below to 0.0. Applied to the raw
+    gripper observation before it is concatenated into the state vector, so
+    training, norm-stat computation, and inference all see the same binary
+    gripper state.
+    """
+
+    # Observation key holding the continuous gripper position.
+    key: str = "observation/gripper_position"
+    # Values >= threshold -> 1.0, otherwise 0.0.
+    threshold: float = 0.5
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if self.key not in data:
+            return data
+        v = np.asarray(data[self.key], dtype=np.float32)
+        return {**data, self.key: (v >= self.threshold).astype(np.float32)}
+
+
+@dataclasses.dataclass(frozen=True)
 class TokenizePrompt(DataTransformFn):
     tokenizer: _tokenizer.PaligemmaTokenizer
     discrete_state_input: bool = False
