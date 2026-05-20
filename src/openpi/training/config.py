@@ -2266,6 +2266,45 @@ _CONFIGS = [
         ).get_freeze_filter(),
         ema_decay=None,
     ),
+    TrainConfig(
+        # Joint training on fridge_m_2house_dr (full, 990 eps) + fridge_m_v2_dr
+        # (first 500 episodes via episode_filters), combined via ConcatDataset.
+        # fridge_m_v2_dr episodes are DR-variant-major (all trajs of DR1, then
+        # DR2, ...) so episodes 0-499 = first 500 trajectories, DR variant 1.
+        # Both pulled from HF Ravenh97/lerobot_data, cached under
+        # ~/.cache/huggingface/lerobot/. Gripper RAW. NOTE: _dr datasets need
+        # the List->Sequence alias wrapper applied before openpi scripts.
+        # Norm stats -> assets/<cfg>/fridge_m_2house_dr_plus_v2_dr_500/norm_stats.json.
+        name="pi05_droid_renderscale_fridge_m_2house_dr_plus_v2_dr_500_h32",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id=("fridge_m_2house_dr", "fridge_m_v2_dr"),
+            assets=AssetsConfig(asset_id="fridge_m_2house_dr_plus_v2_dr_500"),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                episode_filters={
+                    "fridge_m_v2_dr": list(range(500)),
+                },
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=192,  # 8x B200
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
 ]
 
 if len({config.name for config in _CONFIGS}) != len(_CONFIGS):
