@@ -7,6 +7,19 @@ from typing import Literal, Protocol, SupportsIndex, TypeVar
 
 import jax
 import jax.numpy as jnp
+
+# datasets 3.6.0 (pinned in this venv) predates the top-level `List` feature
+# type added in datasets 4.x. LeRobot datasets pushed by 4.x tooling (e.g. the
+# DR variants like 3drawers_v2_dr) declare fixed-length array columns as
+# `List`, which 3.6.0's Features.from_dict rejects with "Feature type 'List'
+# not found". The on-disk layout is identical to 3.x `Sequence`, so alias
+# `List` -> `Sequence` before lerobot/datasets load anything.
+from datasets.features.features import _FEATURE_TYPES as _ds_feature_types
+from datasets.features.features import Sequence as _ds_sequence
+
+if "List" not in _ds_feature_types:
+    _ds_feature_types["List"] = _ds_sequence
+
 import lerobot.common.datasets.lerobot_dataset as lerobot_dataset
 import numpy as np
 import torch
@@ -143,11 +156,11 @@ def create_torch_dataset(
     episode_filters = data_config.episode_filters or {}
     sub_datasets = []
     for rid in repo_ids:
-        # Datasets that exist on local disk (in-house conversions, or HF
-        # subfolders that are not standalone repos) must be loaded with
-        # local_files_only=True so lerobot does not resolve rid as a Hub repo.
-        local_only = (lerobot_dataset.LEROBOT_HOME / rid / "meta" / "info.json").exists()
-        dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(rid, local_files_only=local_only)
+        # NOTE: the installed lerobot (openpi venv) does not accept a
+        # `local_files_only` kwarg on LeRobotDatasetMetadata/LeRobotDataset.
+        # Local datasets under HF_LEROBOT_HOME load fine without it (metadata
+        # is read locally; the Hub is only contacted if local files are absent).
+        dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(rid)
         ds = lerobot_dataset.LeRobotDataset(
             rid,
             episodes=episode_filters.get(rid),
@@ -155,7 +168,6 @@ def create_torch_dataset(
                 key: [t / dataset_meta.fps for t in range(action_horizon)]
                 for key in data_config.action_sequence_keys
             },
-            local_files_only=local_only,
         )
         if data_config.prompt_from_task:
             # Wrap each source with its own PromptFromLeRobotTask so per-sample
