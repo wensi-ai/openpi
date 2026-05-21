@@ -160,10 +160,9 @@ def create_torch_dataset(
         # `local_files_only` kwarg on LeRobotDatasetMetadata/LeRobotDataset.
         # Local datasets under HF_LEROBOT_HOME load fine without it (metadata
         # is read locally; the Hub is only contacted if local files are absent).
-        dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(rid, local_files_only=True)
+        dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(rid)
         ds = lerobot_dataset.LeRobotDataset(
             rid,
-            local_files_only=True,
             episodes=episode_filters.get(rid),
             delta_timestamps={
                 key: [t / dataset_meta.fps for t in range(action_horizon)]
