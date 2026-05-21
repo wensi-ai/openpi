@@ -156,11 +156,11 @@ def create_torch_dataset(
     episode_filters = data_config.episode_filters or {}
     sub_datasets = []
     for rid in repo_ids:
-        # Datasets that exist on local disk (in-house conversions, or HF
-        # subfolders that are not standalone repos) must be loaded with
-        # local_files_only=True so lerobot does not resolve rid as a Hub repo.
-        local_only = (lerobot_dataset.LEROBOT_HOME / rid / "meta" / "info.json").exists()
-        dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(rid, local_files_only=local_only)
+        # NOTE: the installed lerobot (openpi venv) does not accept a
+        # `local_files_only` kwarg on LeRobotDatasetMetadata/LeRobotDataset.
+        # Local datasets under HF_LEROBOT_HOME load fine without it (metadata
+        # is read locally; the Hub is only contacted if local files are absent).
+        dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(rid)
         ds = lerobot_dataset.LeRobotDataset(
             rid,
             episodes=episode_filters.get(rid),
@@ -168,7 +168,6 @@ def create_torch_dataset(
                 key: [t / dataset_meta.fps for t in range(action_horizon)]
                 for key in data_config.action_sequence_keys
             },
-            local_files_only=local_only,
         )
         if data_config.prompt_from_task:
             # Wrap each source with its own PromptFromLeRobotTask so per-sample

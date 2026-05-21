@@ -1670,12 +1670,12 @@ _CONFIGS = [
         ema_decay=None,
     ),
     TrainConfig(
-        # Combined fridge_m_2house + fridge_m_v2 multi-task (ConcatDataset), gripper
-        # observation binarized to {0,1} at threshold 0.5.
+        # Combined fridge_m_2house + fridge_m_v2 multi-task (ConcatDataset).
         # fridge_m_2house: all 990 eps (HF Ravenh97/lerobot_data:fridge_m_2house).
         # fridge_m_v2:     first 500 eps of 1272 via DataConfig.episode_filters.
-        # Norm stats land at assets/<cfg>/fridge_m_2house_plus_v2_first500_binarize/norm_stats.json.
-        name="pi05_droid_renderscale_fridge_m_2house_plus_v2_first500_h32_binarize",
+        # Gripper observation NOT binarized (continuous).
+        # Norm stats land at assets/<cfg>/fridge_m_2house_plus_v2_first500/norm_stats.json.
+        name="pi05_droid_renderscale_fridge_m_2house_plus_v2_first500_h32",
         project_name="renderscale-pi05",
         model=pi0_config.Pi0Config(
             pi05=True,
@@ -1686,12 +1686,11 @@ _CONFIGS = [
         ),
         data=LeRobotMolmospacesDroidDataConfig(
             repo_id=("fridge_m_2house", "fridge_m_v2"),
-            assets=AssetsConfig(asset_id="fridge_m_2house_plus_v2_first500_binarize"),
+            assets=AssetsConfig(asset_id="fridge_m_2house_plus_v2_first500"),
             base_config=DataConfig(
                 prompt_from_task=True,
                 episode_filters={"fridge_m_v2": list(range(500))},
             ),
-            binarize_gripper_threshold=0.5,
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
         num_train_steps=40_000,
