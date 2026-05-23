@@ -1827,6 +1827,202 @@ _CONFIGS = [
         ema_decay=None,
     ),
     TrainConfig(
+        # Same as the ..._dresser_dr_plus_3drawers_v2_dr_first*_h32_binarize runs
+        # but with an asymmetric episode_filters cut: dresser_dr first 600 eps,
+        # 3drawers_v2_dr first 700 eps. Gripper binarized @0.5. Norm stats reused
+        # from the earlier DR runs -- copy norm_stats.json into
+        # assets/<this cfg>/dresser_dr_plus_3drawers_v2_dr_600_700_binarize/.
+        name="pi05_droid_renderscale_dresser_dr_plus_3drawers_v2_dr_600_700_h32_binarize",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id=("dresser_dr", "3drawers_v2_dr"),
+            assets=AssetsConfig(asset_id="dresser_dr_plus_3drawers_v2_dr_600_700_binarize"),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                episode_filters={
+                    "dresser_dr": list(range(600)),
+                    "3drawers_v2_dr": list(range(700)),
+                },
+            ),
+            binarize_gripper_threshold=0.5,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=72,  # 12/GPU on 6x H200; divisible by 4/6/8 GPUs (norm stats compatibility)
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        # Same as the ..._dresser_dr_plus_3drawers_v2_dr_*_h32_binarize runs but
+        # with episode_filters: dresser_dr first 700 eps, 3drawers_v2_dr first 800
+        # eps. Gripper binarized @0.5. Norm stats reused from the earlier DR runs
+        # -- copy norm_stats.json into
+        # assets/<this cfg>/dresser_dr_plus_3drawers_v2_dr_700_800_binarize/.
+        name="pi05_droid_renderscale_dresser_dr_plus_3drawers_v2_dr_700_800_h32_binarize",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id=("dresser_dr", "3drawers_v2_dr"),
+            assets=AssetsConfig(asset_id="dresser_dr_plus_3drawers_v2_dr_700_800_binarize"),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                episode_filters={
+                    "dresser_dr": list(range(700)),
+                    "3drawers_v2_dr": list(range(800)),
+                },
+            ),
+            binarize_gripper_threshold=0.5,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=72,  # 12/GPU on 6x H200; divisible by 4/6/8 GPUs (norm stats compatibility)
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        # 4-way ConcatDataset over the gen + gen_flex video datasets, first 500
+        # episodes of each (2000 total): 3drawers_v2_gen, 3drawers_v2_gen_flex,
+        # dresser_gen, dresser_gen_flex. Gripper binarized @0.5. Norm stats reused
+        # from the ..._dresser_gen_plus_3drawers_v2_gen_h32_binarize run (flex is
+        # a different render of the same sim trajs -> same proprio/actions) --
+        # copy norm_stats.json into assets/<this cfg>/gen_plus_genflex_4x500_binarize/.
+        name="pi05_droid_renderscale_gen_plus_genflex_4x500_h32_binarize",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id=("3drawers_v2_gen", "3drawers_v2_gen_flex", "dresser_gen", "dresser_gen_flex"),
+            assets=AssetsConfig(asset_id="gen_plus_genflex_4x500_binarize"),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                episode_filters={
+                    "3drawers_v2_gen": list(range(500)),
+                    "3drawers_v2_gen_flex": list(range(500)),
+                    "dresser_gen": list(range(500)),
+                    "dresser_gen_flex": list(range(500)),
+                },
+            ),
+            binarize_gripper_threshold=0.5,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=72,  # 12/GPU on 6x H200; divisible by 4/6/8 GPUs (norm stats compatibility)
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        # 4-way ConcatDataset over gen + gen_flex, asymmetric episode_filters
+        # (1500 total): 3drawers_v2_gen 500, 3drawers_v2_gen_flex 250,
+        # dresser_gen 500, dresser_gen_flex 250. Gripper binarized @0.5. Norm
+        # stats reused from ..._dresser_gen_plus_3drawers_v2_gen_h32_binarize --
+        # copy norm_stats.json into
+        # assets/<this cfg>/gen_genflex_500_250_500_250_binarize/.
+        name="pi05_droid_renderscale_gen_genflex_500_250_500_250_h32_binarize",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id=("3drawers_v2_gen", "3drawers_v2_gen_flex", "dresser_gen", "dresser_gen_flex"),
+            assets=AssetsConfig(asset_id="gen_genflex_500_250_500_250_binarize"),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                episode_filters={
+                    "3drawers_v2_gen": list(range(500)),
+                    "3drawers_v2_gen_flex": list(range(250)),
+                    "dresser_gen": list(range(500)),
+                    "dresser_gen_flex": list(range(250)),
+                },
+            ),
+            binarize_gripper_threshold=0.5,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=72,  # 12/GPU on 6x H200; divisible by 4/6/8 GPUs (norm stats compatibility)
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        # Joint dresser_gen + 3drawers_v2_gen, episode_filters dresser_gen 700,
+        # 3drawers_v2_gen 800 (1500 total). Gripper binarized @0.5. Norm stats
+        # reused from ..._dresser_gen_plus_3drawers_v2_gen_h32_binarize -- copy
+        # norm_stats.json into
+        # assets/<this cfg>/dresser_gen_plus_3drawers_v2_gen_700_800_binarize/.
+        name="pi05_droid_renderscale_dresser_gen_plus_3drawers_v2_gen_700_800_h32_binarize",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id=("dresser_gen", "3drawers_v2_gen"),
+            assets=AssetsConfig(asset_id="dresser_gen_plus_3drawers_v2_gen_700_800_binarize"),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                episode_filters={
+                    "dresser_gen": list(range(700)),
+                    "3drawers_v2_gen": list(range(800)),
+                },
+            ),
+            binarize_gripper_threshold=0.5,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=72,  # 12/GPU on 6x H200; divisible by 4/6/8 GPUs (norm stats compatibility)
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
         # Combined fridge_m_2house + fridge_m_v2 multi-task (ConcatDataset).
         # fridge_m_2house: all 990 eps (HF Ravenh97/lerobot_data:fridge_m_2house).
         # fridge_m_v2:     first 500 eps of 1272 via DataConfig.episode_filters.
