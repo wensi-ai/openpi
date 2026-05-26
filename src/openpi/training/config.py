@@ -1220,6 +1220,49 @@ TrainConfig(
 
 
     TrainConfig(
+        name="pi05_s2rg_droid_real_distractor_500x4",
+        model=pi0_config.Pi0Config(
+            action_horizon=32,
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotB1KDataConfig(
+            repo_id=[
+                "wensi-ai/s2rg_apple_depthpatch_500x4_0526", 
+                "wensi-ai/s2rg_bowl_depthpatch_500x4_0526", 
+                "wensi-ai/s2rg_egg_depthpatch_500x4_0526", 
+                "wensi-ai/s2rg_mug_depthpatch_500x4_0526",
+            ],
+            base_config=DataConfig(
+                data_cls=MultiLeRobotDataset,
+                prompt_from_task=True,
+                dataset_root="/scr/s2rg/lerobot",
+                dataset_kwargs={
+                    "episodes": {
+                        "wensi-ai/s2rg_apple_depthpatch_500x4_0526": list(range(2000)),
+                        "wensi-ai/s2rg_bowl_depthpatch_500x4_0526": list(range(2000)),
+                        "wensi-ai/s2rg_egg_depthpatch_500x4_0526": list(range(2000)),
+                        "wensi-ai/s2rg_mug_depthpatch_500x4_0526": list(range(2000)),
+                    },
+                },
+            ),
+            robot_config_name="s2rg/real_franka",
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            action_horizon=32,
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+        num_train_steps=40_000,
+        assets_base_dir="./outputs/assets",
+        checkpoint_base_dir="./outputs/checkpoints",
+    ),
+
+    TrainConfig(
         name="pi05_s2rg_radio_sim",
         model=pi0_config.Pi0Config(
             action_horizon=32,
