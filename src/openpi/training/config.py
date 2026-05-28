@@ -796,7 +796,7 @@ _CONFIGS = [
         name="pi05_i3l_sim",
         model=pi0_config.Pi0Config(action_horizon=30, pi05=True),
         data=LeRobotB1KDataConfig(
-            repo_id=["wensi-ai/open-radio-base-demo-0-200", "wensi-ai/open-radio-base-int-1-100", "wensi-ai/open-radio-hg-int-2-25", "wensi-ai/open-radio-hg-int-3-25"],
+            repo_id=["wensi-ai/open-radio-base-demo-0-200", "wensi-ai/open-radio-base-int-1-100", "wensi-ai/open-radio-sirius-int-2-25", "wensi-ai/open-radio-sirius-int-3-25"],
             base_config=DataConfig(
                 data_cls=I3LLeRobotDataset,
                 dataset_root="/scr/wsai/lerobot",
@@ -805,11 +805,11 @@ _CONFIGS = [
                     "episodes": {
                         "wensi-ai/open-radio-base-demo-0-200": list(range(50)),
                         "wensi-ai/open-radio-base-int-1-100": list(range(25)),
-                        "wensi-ai/open-radio-hg-int-2-25": list(range(25)),
-                        "wensi-ai/open-radio-hg-int-3-25": list(range(25)),
+                        "wensi-ai/open-radio-sirius-int-2-25": list(range(25)),
+                        "wensi-ai/open-radio-sirius-int-3-25": list(range(25)),
                     },
                     "sampling_mode": True,
-                    "reweight_strategy": "hg_daggar",
+                    "reweight_strategy": "sirius",
                 },   
             ),
             robot_config_name="i3l/SimR1Pro",
@@ -820,21 +820,20 @@ _CONFIGS = [
         checkpoint_base_dir="./outputs/checkpoints",
     ),
 
-     TrainConfig(
+    TrainConfig(
         name="pi05_i3l_real",
         model=pi0_config.Pi0Config(action_horizon=30, pi05=True),
         data=LeRobotB1KDataConfig(
-            repo_id=["wensi-ai/books-base-demo-0-100", "wensi-ai/books-base-int-1-25", "wensi-ai/books-hg-int-2-25", "wensi-ai/books-hg-int-3-25"],
+            repo_id=["wensi-ai/popcorn-base-demo-0-100", "wensi-ai/popcorn-base-int-1-25", "wensi-ai/popcorn-hg-int-2-25"],
             base_config=DataConfig(
                 data_cls=I3LLeRobotDataset,
                 dataset_root="/scr/wsai/lerobot",
                 prompt_from_task=True,
                 dataset_kwargs={
                     "episodes": {
-                        "wensi-ai/books-base-demo-0-100": list(range(100)),
-                        "wensi-ai/books-base-int-1-25": list(range(25)),
-                        "wensi-ai/books-hg-int-2-25": list(range(25)),
-                        "wensi-ai/books-hg-int-3-25": list(range(25)),
+                        "wensi-ai/popcorn-base-demo-0-100": list(range(100)),
+                        "wensi-ai/popcorn-base-int-1-25": list(range(25)),
+                        "wensi-ai/popcorn-hg-int-2-25": list(range(25)),
                     },
                     "sampling_mode": True,
                     "reweight_strategy": "hg_daggar",
@@ -1244,6 +1243,49 @@ TrainConfig(
                         "wensi-ai/s2rg_bowl_depthpatch_500x4_0526": list(range(2000)),
                         "wensi-ai/s2rg_egg_depthpatch_500x4_0526": list(range(2000)),
                         "wensi-ai/s2rg_mug_depthpatch_500x4_0526": list(range(2000)),
+                    },
+                },
+            ),
+            robot_config_name="s2rg/real_franka",
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            action_horizon=32,
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+        num_train_steps=40_000,
+        assets_base_dir="./outputs/assets",
+        checkpoint_base_dir="./outputs/checkpoints",
+    ),
+
+    TrainConfig(
+        name="pi05_s2rg_droid_real_distractor_500x3",
+        model=pi0_config.Pi0Config(
+            action_horizon=32,
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotB1KDataConfig(
+            repo_id=[
+                "wensi-ai/s2rg_apple_depthpatch_500x3_0527", 
+                "wensi-ai/s2rg_bowl_depthpatch_500x3_0527", 
+                "wensi-ai/s2rg_egg_depthpatch_500x3_0527", 
+                "wensi-ai/s2rg_mug_depthpatch_500x3_0527",
+            ],
+            base_config=DataConfig(
+                data_cls=MultiLeRobotDataset,
+                prompt_from_task=True,
+                dataset_root="/scr/s2rg/lerobot",
+                dataset_kwargs={
+                    "episodes": {
+                        "wensi-ai/s2rg_apple_depthpatch_500x3_0527": list(range(1500)),
+                        "wensi-ai/s2rg_bowl_depthpatch_500x3_0527": list(range(1500)),
+                        "wensi-ai/s2rg_egg_depthpatch_500x3_0527": list(range(1500)),
+                        "wensi-ai/s2rg_mug_depthpatch_500x3_0527": list(range(1500)),
                     },
                 },
             ),
