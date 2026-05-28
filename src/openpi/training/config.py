@@ -2518,6 +2518,86 @@ _CONFIGS = [
         ).get_freeze_filter(),
         ema_decay=None,
     ),
+        TrainConfig(
+        # 4-dataset joint training: fridge_m_v2_gen + fridge_m_2house_gen (first
+        # 250 eps each) + fridge_m_v2_gen_flex + fridge_m_2house_gen_flex (first
+        # 125 eps each), combined via ConcatDataset. All pulled from HF
+        # Ravenh97/lerobot_data, cached under ~/.cache/huggingface/lerobot/...
+        # (symlinks -> /dev/shm). Gripper RAW. Reuses norm_stats from the
+        # 2house_gen_full+v2_gen_500 run via asset_id=
+        # "fridge_m_2house_gen_plus_v2_gen_500" (user-approved; norm stats
+        # cover only the gen subsets, not the flex subsets).
+        name="pi05_droid_renderscale_fridge_m_v2_2house_gen250_flex125_h32",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id=("fridge_m_2house_gen", "fridge_m_v2_gen", "fridge_m_2house_gen_flex", "fridge_m_v2_gen_flex"),
+            assets=AssetsConfig(asset_id="fridge_m_2house_gen_plus_v2_gen_500"),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                episode_filters={
+                    "fridge_m_v2_gen": list(range(250)),
+                    "fridge_m_2house_gen": list(range(250)),
+                    "fridge_m_v2_gen_flex": list(range(125)),
+                    "fridge_m_2house_gen_flex": list(range(125)),
+                },
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=72,  # 8x B200; 4-dataset gen250+flex125 mix
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+        TrainConfig(
+        # Joint training on fridge_m_v2_gen (first 250 of 1276) + fridge_m_2house_gen
+        # (first 250 of 994) via episode_filters; combined via ConcatDataset. Both
+        # pulled from HF Ravenh97/lerobot_data, cached under ~/.cache/huggingface/
+        # lerobot/{fridge_m_v2_gen,fridge_m_2house_gen}/ (symlinks -> /dev/shm).
+        # Gripper RAW. Reuses norm_stats from the prior 2house_gen_full+v2_gen_500
+        # run via asset_id="fridge_m_2house_gen_plus_v2_gen_500" (user-approved).
+        name="pi05_droid_renderscale_fridge_m_v2_gen_250_plus_2house_gen_250_h32",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id=("fridge_m_2house_gen", "fridge_m_v2_gen"),
+            assets=AssetsConfig(asset_id="fridge_m_2house_gen_plus_v2_gen_500"),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                episode_filters={
+                    "fridge_m_v2_gen": list(range(250)),
+                    "fridge_m_2house_gen": list(range(250)),
+                },
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=72,  # 8x B200; smaller for 500-traj total
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
     TrainConfig(
         # dresser_gen, first 500 trajectories (episodes 0-499 via episode_filters).
         # Single-dataset pi05 run; gripper observation binarized at threshold 0.5.
