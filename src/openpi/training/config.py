@@ -2871,6 +2871,85 @@ _CONFIGS = [
         ).get_freeze_filter(),
         ema_decay=None,
     ),
+    TrainConfig(
+        # Joint training on fridge_m_2house_cosmos_gen (full, 987 eps) +
+        # fridge_m_v2_cosmos_gen (first 500 of 504 via episode_filters),
+        # combined via ConcatDataset. Both pulled from HF Ravenh97/lerobot_data,
+        # cached under ~/.cache/huggingface/lerobot/{fridge_m_2house_cosmos_gen,
+        # fridge_m_v2_cosmos_gen}/ (symlinks -> /dev/shm). Gripper RAW. Reuses
+        # norm_stats from the 2house_gen_full+v2_gen_500 run via asset_id=
+        # "fridge_m_2house_gen_plus_v2_gen_500" (user-approved; proprio schema
+        # is identical, only the visual modality differs in cosmos variants).
+        name="pi05_droid_renderscale_fridge_m_2house_cosmos_gen_plus_v2_cosmos_gen_h32",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id=("fridge_m_2house_cosmos_gen", "fridge_m_v2_cosmos_gen"),
+            assets=AssetsConfig(asset_id="fridge_m_2house_gen_plus_v2_gen_500"),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                episode_filters={
+                    "fridge_m_v2_cosmos_gen": list(range(500)),
+                },
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=72,
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        # Joint training on wan_fridge_m_2house_gen (first 500 of 782 eps) +
+        # wan_fridge_m_v2_gen (first 500 via episode_filters), combined via
+        # ConcatDataset. Both pulled from HF Ravenh97/lerobot_data, cached
+        # under ~/.cache/huggingface/lerobot/{wan_fridge_m_2house_gen,
+        # wan_fridge_m_v2_gen}/ (symlinks -> /dev/shm). Gripper RAW. Reuses
+        # norm_stats from the 2house_gen_full+v2_gen_500 run via asset_id=
+        # "fridge_m_2house_gen_plus_v2_gen_500" (user-approved; proprio schema
+        # is identical, only the visual modality differs in wan variants).
+        name="pi05_droid_renderscale_wan_fridge_m_2house_gen_plus_v2_gen_500_h32",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id=("wan_fridge_m_2house_gen", "wan_fridge_m_v2_gen"),
+            assets=AssetsConfig(asset_id="fridge_m_2house_gen_plus_v2_gen_500"),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                episode_filters={
+                    "wan_fridge_m_2house_gen": list(range(500)),
+                    "wan_fridge_m_v2_gen": list(range(500)),
+                },
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=72,
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
         TrainConfig(
         # 4-dataset joint training: fridge_m_v2_gen + fridge_m_2house_gen (first
         # 250 eps each) + fridge_m_v2_gen_flex + fridge_m_2house_gen_flex (first
