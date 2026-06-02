@@ -2057,6 +2057,45 @@ _CONFIGS = [
         ema_decay=None,
     ),
     TrainConfig(
+        # 4-dataset joint training: 250 eps each from fridge_m_v2_gen,
+        # fridge_m_v2_gen_flex, fridge_m_2house_gen, fridge_m_2house_gen_flex.
+        # Reuses norm stats from pi05_droid_renderscale_fridge_m_2house_plus_v2_first500_h32
+        # via the symlinked asset_id (no recompute needed).
+        name="pi05_droid_renderscale_4dset_gen_genflex_first250_h32",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id=("fridge_m_v2_gen", "fridge_m_v2_gen_flex",
+                     "fridge_m_2house_gen", "fridge_m_2house_gen_flex"),
+            assets=AssetsConfig(asset_id="fridge_m_2house_plus_v2_first500"),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                episode_filters={
+                    "fridge_m_v2_gen": list(range(250)),
+                    "fridge_m_v2_gen_flex": list(range(231)),  # capped at actual dataset size
+                    "fridge_m_2house_gen": list(range(250)),
+                    "fridge_m_2house_gen_flex": list(range(250)),
+                },
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=72,
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
         # Combined fridge_m_v2_gen + fridge_m_0.7_pd_gen multi-task (ConcatDataset).
         # fridge_m_v2_gen:     1272 eps / 380,821 frames (HF Ravenh97/lerobot_data:fridge_m_v2_gen).
         # fridge_m_0.7_pd_gen: 1018 eps / 304,491 frames (HF Ravenh97/lerobot_data:fridge_m_0.7_pd_gen).
