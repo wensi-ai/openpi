@@ -1633,6 +1633,89 @@ _CONFIGS = [
         ema_decay=None,
     ),
     TrainConfig(
+        # Joint training on dresser_cosmos_gen + 3drawers_cosmos_gen, each
+        # capped to first 1000 eps via episode_filters. Gripper binarized @0.5.
+        # Both pulled from HF Ravenh97/lerobot_data, cached under
+        # ~/.cache/huggingface/lerobot/{dresser_cosmos_gen,3drawers_cosmos_gen}/
+        # (symlinks -> /dev/shm). Reuses norm_stats from the non-cosmos
+        # ..._dresser_gen_plus_3drawers_v2_gen_h32_binarize run via asset_id=
+        # "dresser_gen_plus_3drawers_v2_gen_binarize" (user-approved; proprio
+        # schema identical, only visual modality differs in cosmos variants).
+        name="pi05_droid_renderscale_dresser_cosmos_gen_plus_3drawers_cosmos_gen_h32_binarize",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id=("dresser_cosmos_gen", "3drawers_cosmos_gen"),
+            assets=AssetsConfig(asset_id="dresser_gen_plus_3drawers_v2_gen_binarize"),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                episode_filters={
+                    "dresser_cosmos_gen": list(range(1000)),
+                    "3drawers_cosmos_gen": list(range(1000)),
+                },
+            ),
+            binarize_gripper_threshold=0.5,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=72,
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        # Wan-augmented sibling of the dresser_cosmos_gen+3drawers_cosmos_gen
+        # binarize run. Joint training on wan_dresser_gen + wan_3drawers_gen,
+        # each capped to first 1000 eps via episode_filters. Gripper
+        # binarized @0.5. Both pulled from HF Ravenh97/lerobot_data, cached
+        # under ~/.cache/huggingface/lerobot/{wan_dresser_gen,wan_3drawers_gen}/
+        # (symlinks -> /dev/shm). Reuses norm_stats from the non-cosmos
+        # ..._dresser_gen_plus_3drawers_v2_gen_h32_binarize run via asset_id=
+        # "dresser_gen_plus_3drawers_v2_gen_binarize" (user-approved; proprio
+        # schema identical, only visual modality differs in wan variants).
+        name="pi05_droid_renderscale_wan_dresser_gen_plus_wan_3drawers_gen_h32_binarize",
+        project_name="renderscale-pi05",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotMolmospacesDroidDataConfig(
+            repo_id=("wan_dresser_gen", "wan_3drawers_gen"),
+            assets=AssetsConfig(asset_id="dresser_gen_plus_3drawers_v2_gen_binarize"),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                episode_filters={
+                    "wan_dresser_gen": list(range(1000)),
+                    "wan_3drawers_gen": list(range(1000)),
+                },
+            ),
+            binarize_gripper_threshold=0.5,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=40_000,
+        batch_size=72,
+        num_workers=4,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
         # Same as ..._dresser_gen_plus_3drawers_v2_gen_h32_binarize but episode_filters
         # caps each repo at the first 500 episodes (dresser_gen 500 of 1207,
         # 3drawers_v2_gen 500 of 965). Gripper binarized @0.5. Norm stats reused
