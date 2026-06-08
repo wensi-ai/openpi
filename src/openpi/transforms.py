@@ -245,6 +245,52 @@ class AbsoluteActions(DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class MappedDeltaActions(DataTransformFn):
+    """Repacks absolute actions into delta action space with explicit state mappings."""
+
+    # Sequence of (action_indices, state_indices) pairs. Each pair must have the same
+    # length, and only those action dimensions are converted to deltas.
+    mappings: Sequence[tuple[Sequence[int], Sequence[int]]]
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if "actions" not in data:
+            return data
+
+        state, actions = data["state"], data["actions"]
+        for action_indices, state_indices in self.mappings:
+            if len(action_indices) != len(state_indices):
+                raise ValueError(
+                    f"Action/state delta mapping length mismatch: {len(action_indices)} != {len(state_indices)}"
+                )
+            actions[..., action_indices] -= np.expand_dims(state[..., state_indices], axis=-2)
+        data["actions"] = actions
+
+        return data
+
+
+@dataclasses.dataclass(frozen=True)
+class MappedAbsoluteActions(DataTransformFn):
+    """Repacks delta actions into absolute action space with explicit state mappings."""
+
+    mappings: Sequence[tuple[Sequence[int], Sequence[int]]]
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if "actions" not in data:
+            return data
+
+        state, actions = data["state"], data["actions"]
+        for action_indices, state_indices in self.mappings:
+            if len(action_indices) != len(state_indices):
+                raise ValueError(
+                    f"Action/state delta mapping length mismatch: {len(action_indices)} != {len(state_indices)}"
+                )
+            actions[..., action_indices] += np.expand_dims(state[..., state_indices], axis=-2)
+        data["actions"] = actions
+
+        return data
+
+
+@dataclasses.dataclass(frozen=True)
 class TokenizePrompt(DataTransformFn):
     tokenizer: _tokenizer.PaligemmaTokenizer
     discrete_state_input: bool = False

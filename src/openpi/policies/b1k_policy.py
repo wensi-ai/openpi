@@ -21,13 +21,13 @@ def make_b1k_example() -> dict:
 
 def extract_state_from_proprio(proprio_data, robot_config: RobotConfig) -> np.ndarray:
     """Extract state from proprioception data based on robot configuration.
-    
+
     We assume perfect correlation for the two gripper fingers.
-    
+
     Args:
         proprio_data: Raw proprioception data
         robot_config: RobotConfig instance containing robot configuration
-        
+
     Returns:
         Extracted state array
     """
@@ -54,17 +54,16 @@ def _parse_image(image) -> np.ndarray:
 class B1KInputs(transforms.DataTransformFn):
     # Determines which model will be used.
     model_type: _model.ModelType = _model.ModelType.PI0
-    
+
     # Robot configuration object
     robot_config: RobotConfig = dataclasses.field(default=None)
 
     def __call__(self, data: dict) -> dict:
-
         proprio_data = data["observation/state"]
         # extract joint position
         state = extract_state_from_proprio(proprio_data, self.robot_config)
         if "actions" in data:
-            action =  data["actions"]
+            action = data["actions"]
 
         # Possibly need to parse images to uint8 (H,W,C) since LeRobot automatically
         # stores as float32 (C,H,W), gets skipped for policy inference
@@ -110,4 +109,4 @@ class B1KOutputs(transforms.DataTransformFn):
 
     def __call__(self, data: dict) -> dict:
         # Only return the first 23 dims.
-        return {"actions": np.asarray(data["actions"][:, :self.action_dim])}
+        return {"actions": np.asarray(data["actions"][:, : self.action_dim])}

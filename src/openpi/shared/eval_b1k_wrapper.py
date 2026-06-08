@@ -11,9 +11,10 @@ class B1KPolicyWrapper:
         policy: BasePolicy,
         robot: str,
         text_prompt: str,
-        control_mode: str = "temporal_ensemble",
+        control_mode: str,
+        action_horizon: int,
+        max_len: int,
         obs_size: tuple[int, int] = (224, 224),
-        action_horizon: int = 10,
     ) -> None:
         # Load robot config from registry
         self.robot = ROBOT_REGISTRY[robot]
@@ -22,8 +23,7 @@ class B1KPolicyWrapper:
         self.control_mode = control_mode
         self.action_horizon = action_horizon
         self.obs_size = obs_size
-        self.replan_interval = action_horizon  # K: replan every 10 steps
-        self.max_len = 50  # how long the policy sequences are
+        self.max_len = max_len
         self.temporal_ensemble_max = 5  # max number of sequences to ensemble
 
         # Extract gripper indices from robot config (end-effectors to preserve)
@@ -31,7 +31,6 @@ class B1KPolicyWrapper:
         for action_config in self.robot.action:
             if action_config.is_eef and action_config.indices is not None:
                 self.gripper_indices.extend(action_config.indices)
-
         # Vectorized action buffers (initialized on first call)
         self.batch_size = None
         self.action_buffer = None  # Shape: (batch, max_sequences, max_horizon, action_dim)
@@ -47,13 +46,14 @@ class B1KPolicyWrapper:
         self.sequence_lengths = None
         self.num_active_sequences = None
         self.step_counter = None
+        self.policy.reset()
 
     def _ensure_batch_initialized(self, batch_size: int, action_dim: int = None):
         """Ensure buffers are initialized for the given batch size."""
         if self.batch_size != batch_size or self.action_buffer is None:
             self.batch_size = batch_size
 
-            # For receeding_horizon: simple buffer
+            # For receding_horizon: simple buffer
             # We'll set action_dim when we first see actions
             if action_dim is not None:
                 self.action_buffer = np.zeros(
@@ -85,26 +85,50 @@ class B1KPolicyWrapper:
         while len(observations) < 3:
             observations.append(np.zeros((batch_size, *self.obs_size, 3), dtype=np.uint8))
         img_obs = np.stack(observations, axis=1)  # Shape: (B, 3, H, W, C)
-        processed_input = [{
-            "observation/image_0": img_obs[i, 0],
-            "observation/image_1": img_obs[i, 1],
-            "observation/image_2": img_obs[i, 2],
-            "observation/state": prop_state[i],
-            "prompt": self.text_prompt,
-        } for i in range(batch_size)]
+        processed_input = [
+            {
+                "observation/image_0": img_obs[i, 0],
+                "observation/image_1": img_obs[i, 1],
+                "observation/image_2": img_obs[i, 2],
+                "observation/state": prop_state[i],
+                "prompt": self.text_prompt,
+            }
+            for i in range(batch_size)
+        ]
         return processed_input
 
-    def act_receeding_horizon(self, input_obs):
+    def _get_current_actions(
+        self,
+        *,
+        batch_range: np.ndarray,
+        seq_range: np.ndarray,
+        active_mask: np.ndarray,
+        current_indices: np.ndarray,
+        sequence_lengths: np.ndarray,
+    ) -> np.ndarray:
+        """Safely gather current actions for active sequences only."""
+        safe_lengths = np.maximum(sequence_lengths, 1)
+        safe_indices = np.minimum(current_indices, safe_lengths - 1)
+        safe_indices = np.where(active_mask, safe_indices, 0)
+        batch_idx = batch_range[:, None, None]
+        seq_idx = seq_range[None, :, None]
+        pos_idx = safe_indices[:, :, None]
+        return self.action_buffer[batch_idx, seq_idx, pos_idx].squeeze(-2)
+
+    def act_receding_horizon(self, input_obs):
         """
-        Receeding horizon: execute actions from current plan until exhausted, then replan.
+        receding horizon: execute actions from current plan for up to action_horizon steps, then replan.
         Uses vectorized buffers for efficient batch processing.
         """
+        batched = input_obs[f"{self.robot.name}::proprio"].ndim != 1
         input_batch = self.process_input(input_obs)
         batch_size = len(input_batch)
         if self.sequence_indices is None:
             needs_inference = np.ones(batch_size, dtype=bool)
         else:
-            needs_inference = self.sequence_indices[:, 0] >= self.sequence_lengths[:, 0]
+            needs_inference = (self.sequence_indices[:, 0] >= self.sequence_lengths[:, 0]) | (
+                (self.step_counter % self.action_horizon) == 0
+            )
 
         if needs_inference.any():
             indices_needing_inference = np.where(needs_inference)[0]
@@ -132,22 +156,27 @@ class B1KPolicyWrapper:
 
         # Increment indices (vectorized)
         self.sequence_indices[:, 0] += 1
-
+        self.step_counter += 1
+        if not batched:
+            final_actions = final_actions[0]
         return torch.from_numpy(final_actions)
 
-    def act_receeding_temporal(self, input_obs):
+    def act_receding_temporal(self, input_obs):
         """
-        Receeding temporal: infer every K steps and smooth actions across recent sequences.
+        receding temporal: infer every K steps and smooth actions across recent sequences.
         Uses vectorized buffers for efficient batch processing.
         """
+        batched = input_obs[f"{self.robot.name}::proprio"].ndim != 1
         input_batch = self.process_input(input_obs)
         batch_size = len(input_batch)
 
         # Initialize buffers on first call
         if self.action_buffer is None:
             # Need to infer once to get action_dim
-            action = self.policy.infer(input_batch)
-            target_action = action["actions"].copy()
+            action = []
+            for i in range(batch_size):
+                action.append(self.policy.infer(input_batch[i]))
+            target_action = np.array([a["actions"].copy() for a in action])  # (B, T, action_dim)
             action_dim = target_action.shape[2]
             self._ensure_batch_initialized(batch_size, action_dim)
 
@@ -159,7 +188,7 @@ class B1KPolicyWrapper:
             self.num_active_sequences[:] = 1
 
         # Step 1: Run policy for elements that need replanning
-        needs_replan = (self.step_counter % self.replan_interval) == 0
+        needs_replan = (self.step_counter % self.action_horizon) == 0
         if needs_replan.any():
             indices_needing_replan = np.where(needs_replan)[0]
 
@@ -202,11 +231,13 @@ class B1KPolicyWrapper:
         # Create mask for active sequences (B, max_seq)
         active_mask = seq_range[None, :] < self.num_active_sequences[:, None]
         current_indices = self.sequence_indices[:, :max_seq]  # (B, max_seq)
-        batch_idx = batch_range[:, None, None]
-        seq_idx = seq_range[None, :, None]
-        pos_idx = current_indices[:, :, None]
-        actions_current = self.action_buffer[batch_idx, seq_idx, pos_idx].squeeze(-2)  # (B, max_seq, action_dim)
-
+        actions_current = self._get_current_actions(
+            batch_range=batch_range,
+            seq_range=seq_range,
+            active_mask=active_mask,
+            current_indices=current_indices,
+            sequence_lengths=self.sequence_lengths[:, :max_seq],
+        )  # (B, max_seq, action_dim)
         k = 0.005
         exp_weights = np.exp(k * seq_range)[None, :]  # (1, max_seq)
         masked_weights = exp_weights * active_mask  # (B, max_seq)
@@ -238,6 +269,8 @@ class B1KPolicyWrapper:
                 self.num_active_sequences[b] = active_count
 
         self.step_counter += 1
+        if not batched:
+            final_actions = final_actions[0]
         return torch.from_numpy(final_actions)
 
     def act_temporal_ensemble(self, input_obs):
@@ -258,7 +291,6 @@ class B1KPolicyWrapper:
             self._ensure_batch_initialized(batch_size, action_dim)
             self.num_active_sequences[:] = 0
 
-        final_actions = np.empty((batch_size, action_dim))
         # Vectorized shift for all elements that need it, increment active counts otherwise
         needs_shift = self.num_active_sequences >= self.temporal_ensemble_max
         if needs_shift.any():
@@ -270,9 +302,9 @@ class B1KPolicyWrapper:
 
         # Insert new sequences to action buffer
         insert_indices = np.where(needs_shift, self.temporal_ensemble_max - 1, self.num_active_sequences - 1)
-        seq_len = target_action.shape[1]
+        seq_len = min(target_action.shape[1], self.max_len)
         batch_range = np.arange(batch_size)
-        self.action_buffer[batch_range, insert_indices, :seq_len] = target_action
+        self.action_buffer[batch_range, insert_indices, :seq_len] = target_action[:, :seq_len]
         self.sequence_indices[batch_range, insert_indices] = 0
         self.sequence_lengths[batch_range, insert_indices] = seq_len
 
@@ -280,10 +312,13 @@ class B1KPolicyWrapper:
         seq_range = np.arange(self.temporal_ensemble_max)
         active_mask = seq_range[None, :] < self.num_active_sequences[:, None]
         current_indices = self.sequence_indices[:, : self.temporal_ensemble_max]  # (B, max_seq)
-        batch_idx = batch_range[:, None, None]
-        seq_idx = seq_range[None, :, None]
-        pos_idx = current_indices[:, :, None]
-        actions_current = self.action_buffer[batch_idx, seq_idx, pos_idx].squeeze(-2)  # (B, max_seq, action_dim)
+        actions_current = self._get_current_actions(
+            batch_range=batch_range,
+            seq_range=seq_range,
+            active_mask=active_mask,
+            current_indices=current_indices,
+            sequence_lengths=self.sequence_lengths[:, : self.temporal_ensemble_max],
+        )  # (B, max_seq, action_dim)
 
         k = 0.005
         exp_weights = np.exp(k * seq_range)[None, :]  # (1, max_seq)
@@ -298,16 +333,32 @@ class B1KPolicyWrapper:
         # Increment all sequence indices
         self.sequence_indices[:, : self.temporal_ensemble_max] += 1
 
+        # Drop exhausted sequences (compaction per batch element)
+        still_active = (
+            self.sequence_indices[:, : self.temporal_ensemble_max]
+            < self.sequence_lengths[:, : self.temporal_ensemble_max]
+        )
+        still_active = still_active & active_mask
+        for b in range(batch_size):
+            active_in_slot = still_active[b, :]
+            if not active_in_slot[: self.num_active_sequences[b]].all():
+                active_count = active_in_slot.sum()
+                active_indices = np.where(active_in_slot)[0]
+                self.action_buffer[b, :active_count] = self.action_buffer[b, active_indices]
+                self.sequence_indices[b, :active_count] = self.sequence_indices[b, active_indices]
+                self.sequence_lengths[b, :active_count] = self.sequence_lengths[b, active_indices]
+                self.num_active_sequences[b] = active_count
+
         if not batched:
             final_actions = final_actions[0]
         return torch.from_numpy(final_actions)
 
     def act(self, input_obs):
         """Dispatch to the appropriate action method based on control mode."""
-        if self.control_mode == "receeding_temporal":
-            return self.act_receeding_temporal(input_obs)
-        elif self.control_mode == "receeding_horizon":
-            return self.act_receeding_horizon(input_obs)
+        if self.control_mode == "receding_temporal":
+            return self.act_receding_temporal(input_obs)
+        elif self.control_mode == "receding_horizon":
+            return self.act_receding_horizon(input_obs)
         elif self.control_mode == "temporal_ensemble":
             return self.act_temporal_ensemble(input_obs)
         else:
