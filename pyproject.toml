@@ -17,7 +17,7 @@ dependencies = [
     "imageio>=2.36.1",
     "jax[cuda12]==0.5.3",
     "jaxtyping==0.2.36",
-    "lerobot",
+    "lerobot[dataset]",
     "ml_collections==1.0.0",
     "numpy>=1.22.4,<2.0.0",
     "numpydantic>=1.6.6",
@@ -35,7 +35,7 @@ dependencies = [
     "beartype==0.19.0",
     "chex==0.1.90",
     "treescope>=0.1.7",
-    "transformers==4.53.2",
+    "transformers==5.5.4",
     "rich>=14.0.0",
     "polars>=1.30.0",
 ]
@@ -67,7 +67,7 @@ override-dependencies = ["ml-dtypes==0.4.1", "tensorstore==0.1.74"]
 
 [tool.uv.sources]
 openpi-client = { workspace = true }
-lerobot = { git = "https://github.com/huggingface/lerobot", rev = "577cd10974b84bea1f06b6472eb9e5e74e07f77a" }
+lerobot = { git = "https://github.com/wensi-ai/lerobot", branch = "release/b1k" }
 dlimp = { git = "https://github.com/kvablack/dlimp", rev = "ad72ce3a9b414db2185bc0b38461d4101a65477a" }
 
 [tool.uv.workspace]

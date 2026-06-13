@@ -6,32 +6,31 @@ import dataclasses
 import difflib
 import logging
 import pathlib
-from typing import Any, Literal, List, Protocol, TypeAlias
-from lerobot.datasets.lerobot_dataset import LeRobotDataset, MultiLeRobotDataset
+from typing import Any, List, Literal, Protocol, TypeAlias
 
 import etils.epath as epath
 import flax.nnx as nnx
 from typing_extensions import override
 import tyro
 
+from openpi.configs import ROBOT_REGISTRY
 import openpi.models.model as _model
 import openpi.models.pi0_config as pi0_config
 import openpi.models.pi0_fast as pi0_fast
 import openpi.models.tokenizer as _tokenizer
 import openpi.policies.aloha_policy as aloha_policy
-import openpi.policies.droid_policy as droid_policy
 import openpi.policies.b1k_policy as b1k_policy
+import openpi.policies.droid_policy as droid_policy
 import openpi.policies.libero_policy as libero_policy
 import openpi.shared.download as _download
 import openpi.shared.normalize as _normalize
 import openpi.training.droid_rlds_dataset as droid_rlds_dataset
+import openpi.training.lerobot_compat as _lerobot_compat
 import openpi.training.misc.polaris_config as polaris_config
 import openpi.training.misc.roboarena_config as roboarena_config
 import openpi.training.optimizer as _optimizer
 import openpi.training.weight_loaders as weight_loaders
 import openpi.transforms as _transforms
-from openpi.configs import ROBOT_REGISTRY
-from openpi.training.i3l import I3LLeRobotDataset
 
 ModelType: TypeAlias = _model.ModelType
 # Work around a tyro issue with using nnx.filterlib.Filter directly.
@@ -99,16 +98,17 @@ class DataConfig:
     # Action space for DROID dataset.
     action_space: droid_rlds_dataset.DroidActionSpace | None = None
     # List of datasets to sample from: name, version, weight, and optionally filter_dict_path
-    datasets: Sequence[droid_rlds_dataset.RLDSDataset | LeRobotDataset] = ()
+    datasets: Sequence[droid_rlds_dataset.RLDSDataset | _lerobot_compat.LeRobotDataset] = ()
 
     # ============== Behavior Dataset Params ==================
     # Dataset class to use for loading the behavior-style lerobot dataset
-    data_cls: Any = LeRobotDataset
+    data_cls: Any = _lerobot_compat.LeRobotDataset
     # Path to local copy of the dataset
     # Note that this includes repo_id if LeRobotDataset and not include repo_id if MultiLeRobotDataset
     dataset_root: str | None = None
     # Extra kwargs to pass into the dataset constructor, if using a custom dataset class that requires additional arguments.
     dataset_kwargs: dict[str, Any] = dataclasses.field(default_factory=dict)
+
 
 class GroupFactory(Protocol):
     def __call__(self, model_config: _model.BaseModelConfig) -> _transforms.Group:
@@ -199,7 +199,9 @@ class DataConfigFactory(abc.ABC):
             use_quantile_norm=model_config.model_type != ModelType.PI0,
         )
 
-    def _load_norm_stats(self, assets_dir: epath.Path, asset_id: str | List[str] | None) -> dict[str, _transforms.NormStats] | None:
+    def _load_norm_stats(
+        self, assets_dir: epath.Path, asset_id: str | List[str] | None
+    ) -> dict[str, _transforms.NormStats] | None:
         if asset_id is None:
             return None
         if isinstance(asset_id, list):
@@ -369,6 +371,7 @@ class LeRobotLiberoDataConfig(DataConfigFactory):
             model_transforms=model_transforms,
         )
 
+
 @dataclasses.dataclass(frozen=True)
 class LeRobotB1KDataConfig(DataConfigFactory):
     robot_config_name: str = tyro.MISSING
@@ -410,19 +413,17 @@ class LeRobotB1KDataConfig(DataConfigFactory):
             image_key = f"image_{i}"
             if image_key in robot_config.observations:
                 repack_mapping[f"observation/{image_key}"] = robot_config.observations[image_key].dataset_key
-        
-        # Add non-image observations
-        repack_mapping.update({
-            "observation/state": "observation.state",
-            "actions": robot_config.action_key,
-            "prompt": "prompt",
-        })
 
-        repack_transform = _transforms.Group(
-            inputs=[
-                _transforms.RepackTransform(repack_mapping)
-            ]
+        # Add non-image observations
+        repack_mapping.update(
+            {
+                "observation/state": "observation.state",
+                "actions": robot_config.action_key,
+                "prompt": "prompt",
+            }
         )
+
+        repack_transform = _transforms.Group(inputs=[_transforms.RepackTransform(repack_mapping)])
 
         # Prepare data for policy training
         # Convert images to uint8 numpy arrays, add masks
@@ -434,7 +435,7 @@ class LeRobotB1KDataConfig(DataConfigFactory):
         # extra delta transform.
         if self.extra_delta_transform:
             delta_mappings = self._build_delta_mappings(robot_config)
-            
+
             data_transforms = data_transforms.push(
                 inputs=[_transforms.MappedDeltaActions(delta_mappings)],
                 outputs=[_transforms.MappedAbsoluteActions(delta_mappings)],
@@ -453,7 +454,7 @@ class LeRobotB1KDataConfig(DataConfigFactory):
             action_sequence_keys=(robot_config.action_key,),
             use_quantile_norm=False,
         )
-   
+
 
 @dataclasses.dataclass(frozen=True)
 class RLDSDroidDataConfig(DataConfigFactory):
@@ -633,9 +634,9 @@ class TrainConfig:
     # eg. if total device is 4 and fsdp devices is 2; then the model will shard to 2 devices and run
     # data parallel between 2 groups of devices.
     fsdp_devices: int = 1
-    
+
     # ============== B1K Specific Params ==================
-    # How often (in steps) to log validation metrics. If None, no validation will be performed. 
+    # How often (in steps) to log validation metrics. If None, no validation will be performed.
     val_log_interval: int | None = None
     # Validation batch size (optional, defaults to batch_size if not set)
     val_batch_size: int | None = None
@@ -751,19 +752,17 @@ _CONFIGS = [
             ),
         ),
     ),
-  
     #  ================= behavior configs =================
-
     TrainConfig(
         name="pi05_b1k",
         model=pi0_config.Pi0Config(action_horizon=32, pi05=True),
         data=LeRobotB1KDataConfig(
             repo_id="behavior/2026-challenge-demos",
             base_config=DataConfig(
-                data_cls=LeRobotDataset,
-                dataset_root=""
+                data_cls=_lerobot_compat.LeRobotDataset,
+                dataset_root="",
                 prompt_from_task=True,
-                dataset_kwargs={},                
+                dataset_kwargs={},
             ),
             robot_config_name="b1k/R1Pro",
         ),
@@ -772,7 +771,6 @@ _CONFIGS = [
         assets_base_dir="./outputs/assets",
         checkpoint_base_dir="./outputs/checkpoints",
     ),
-
     #
     # Fine-tuning Libero configs.
     #

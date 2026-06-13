@@ -7,13 +7,13 @@ from typing import Literal, Protocol, SupportsIndex, TypeVar
 
 import jax
 import jax.numpy as jnp
-import lerobot.datasets.lerobot_dataset as lerobot_dataset
 import numpy as np
 import torch
 
 import openpi.models.model as _model
 import openpi.training.config as _config
 from openpi.training.droid_rlds_dataset import DroidRldsDataset
+import openpi.training.lerobot_compat as _lerobot_compat
 import openpi.transforms as _transforms
 
 T_co = TypeVar("T_co", covariant=True)
@@ -130,10 +130,14 @@ class FakeDataset(Dataset):
 def create_b1k_dataset(data_config: _config.DataConfig, action_horizon: int) -> Dataset:
     """Create a behavior dataset for training."""
     if isinstance(data_config.repo_id, list):
-        dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id=data_config.repo_id[0], root=os.path.join(data_config.dataset_root, data_config.repo_id[0]))
+        dataset_meta = _lerobot_compat.LeRobotDatasetMetadata(
+            repo_id=data_config.repo_id[0], root=os.path.join(data_config.dataset_root, data_config.repo_id[0])
+        )
         dataset_kwargs = {"repo_ids": data_config.repo_id, **data_config.dataset_kwargs}
     else:
-        dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id=data_config.repo_id, root=data_config.dataset_root)
+        dataset_meta = _lerobot_compat.LeRobotDatasetMetadata(
+            repo_id=data_config.repo_id, root=data_config.dataset_root
+        )
         dataset_kwargs = {"repo_id": data_config.repo_id, **data_config.dataset_kwargs}
     dataset = data_config.data_cls(
         root=data_config.dataset_root,
@@ -144,7 +148,9 @@ def create_b1k_dataset(data_config: _config.DataConfig, action_horizon: int) -> 
     )
 
     if data_config.prompt_from_task:
-        dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(dataset_meta.tasks)])
+        dataset = TransformedDataset(
+            dataset, [_transforms.PromptFromLeRobotTask(_lerobot_compat.tasks_from_metadata(dataset_meta))]
+        )
 
     return dataset
 
@@ -159,8 +165,8 @@ def create_torch_dataset(
     if repo_id == "fake":
         return FakeDataset(model_config, num_samples=1024)
 
-    dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
-    dataset = lerobot_dataset.LeRobotDataset(
+    dataset_meta = _lerobot_compat.LeRobotDatasetMetadata(repo_id)
+    dataset = _lerobot_compat.LeRobotDataset(
         data_config.repo_id,
         delta_timestamps={
             key: [t / dataset_meta.fps for t in range(action_horizon)] for key in data_config.action_sequence_keys
@@ -169,7 +175,9 @@ def create_torch_dataset(
     )
 
     if data_config.prompt_from_task:
-        dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(dataset_meta.tasks)])
+        dataset = TransformedDataset(
+            dataset, [_transforms.PromptFromLeRobotTask(_lerobot_compat.tasks_from_metadata(dataset_meta))]
+        )
 
     return dataset
 
@@ -312,7 +320,7 @@ def create_b1k_data_loader(
         num_workers=config.num_workers,
         seed=config.seed,
     )
-    
+
     return DataLoaderImpl(data_config, data_loader)
 
 
